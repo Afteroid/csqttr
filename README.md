@@ -23,6 +23,8 @@
 - Windows & Linux порт - [luminescq/focsq](https://github.com/luminescq/focsq)
 - ios совместимый клиент - [anton48/vk-turn-proxy-ios](https://github.com/anton48/vk-turn-proxy-ios)
 
+**Прекрасный аналог csqtt / wdtt**: [hackdiaz-dev/turn-proxy-android](https://github.com/hackdiaz-dev/turn-proxy-android)
+
 > [!WARNING]
 > **Некоммерческий статус и запрет коммерческого использования**
 > Проект является строго некоммерческим исследовательским инструментом и не преследует извлечения выгоды.
