@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.net.URLDecoder
+import java.util.concurrent.atomic.AtomicInteger
 
 internal data class VkAuthPayload(
     val token: String,
@@ -35,8 +36,19 @@ internal object VkAuthWebViewManager {
         mainHandler.post {
             runCatching {
                 val manager = CookieManager.getInstance()
-                manager.removeAllCookies(null)
-                manager.flush()
+                val deletions = VK_AUTH_COOKIE_ORIGINS.flatMap { origin ->
+                    vkCookieDeletionHeaders(origin, manager.getCookie(origin)).map { origin to it }
+                }
+                if (deletions.isEmpty()) {
+                    manager.flush()
+                } else {
+                    val remaining = AtomicInteger(deletions.size)
+                    deletions.forEach { (origin, header) ->
+                        manager.setCookie(origin, header) {
+                            if (remaining.decrementAndGet() == 0) manager.flush()
+                        }
+                    }
+                }
             }
         }
     }

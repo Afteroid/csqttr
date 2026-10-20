@@ -292,11 +292,13 @@ class TunVpnService : VpnService() {
                     }
                     .toSet()
                 if (installedIncluded.isEmpty()) {
-                    if (serverRule == null) {
+                    if (serverRule == null || userSelected.isNotEmpty()) {
                         failVpn("Whitelist пуст: выберите хотя бы одно установленное приложение")
                         return
                     } else {
-                        Log.i(TAG, "Server whitelist has no matching installed apps; falling back to full tunnel")
+                        // An empty server package list means a device-wide domain/IP rule.
+                        // A nonempty list with no installed matches must never broaden to all apps.
+                        Log.i(TAG, "Server rule applies to all applications (no package filter)")
                         try {
                             builder.addDisallowedApplication(applicationContext.packageName)
                         } catch (e: Exception) {

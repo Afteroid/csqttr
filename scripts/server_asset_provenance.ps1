@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("Write", "Verify")]
     [string]$Mode,
-    [string]$Root
+    [string]$Root,
+    [ValidateSet("csqtt-linux-amd64", "csqtt-linux-arm64", "csqtt-linux-armv7")]
+    [string[]]$Assets = @("csqtt-linux-amd64", "csqtt-linux-arm64", "csqtt-linux-armv7")
 )
 
 Set-StrictMode -Version Latest
@@ -29,6 +31,8 @@ $assetSpecs = @(
     [pscustomobject]@{ AssetName = "csqtt-linux-arm64"; Target = "aarch64-unknown-linux-musl"; ElfClass = 2; ElfMachine = 183 },
     [pscustomobject]@{ AssetName = "csqtt-linux-armv7"; Target = "armv7-unknown-linux-musleabihf"; ElfClass = 1; ElfMachine = 40 }
 )
+$assetSpecs = @($assetSpecs | Where-Object { $_.AssetName -in $Assets })
+if ($assetSpecs.Count -eq 0) { throw "Select at least one server asset" }
 
 function Assert-RegularFile {
     param([string]$Path, [string]$Label)
@@ -109,7 +113,9 @@ function Get-BuildInputHash {
         ForEach-Object { $_.FullName }
     $rootPrefix = $projectRoot.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
     $builder = New-Object Text.StringBuilder
-    foreach ($file in @($files | Sort-Object -Unique)) {
+    $sortedFiles = [string[]]@($files | Select-Object -Unique)
+    [Array]::Sort($sortedFiles, [StringComparer]::Ordinal)
+    foreach ($file in $sortedFiles) {
         Assert-RegularFile -Path $file -Label "Server build input"
         $fullPath = [IO.Path]::GetFullPath($file)
         if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {

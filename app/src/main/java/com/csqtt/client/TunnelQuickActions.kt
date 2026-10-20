@@ -38,8 +38,9 @@ internal suspend fun buildQuickStartIntent(context: Context): Intent? {
     }
 }
 
-internal suspend fun toggleTunnelFromQuickAction(context: Context, running: Boolean, openMain: () -> Unit) {
-    if (running) {
+internal suspend fun toggleTunnelFromQuickAction(context: Context, openMain: () -> Unit) {
+    if (TunnelManager.stopping.value) return
+    if (tunnelPowerIsOn(TunnelManager.running.value, TunnelManager.starting.value, TunnelManager.autoPausedForWifi.value)) {
         context.startService(Intent(context, TunnelService::class.java).apply { action = QuickTunnelAction.STOP })
         return
     }

@@ -89,9 +89,7 @@ import com.csqtt.client.ui.design.CsqttSizes
 import com.csqtt.client.ui.design.CsqttSpacing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -320,17 +318,20 @@ fun ExceptionsTab(
     var whitelistSelection by remember { mutableStateOf(persistedWhitelist) }
     var lastSavedBlacklist by remember { mutableStateOf(persistedBlacklist) }
     var lastSavedWhitelist by remember { mutableStateOf(persistedWhitelist) }
-    var appSaveJob by remember { mutableStateOf<Job?>(null) }
+    // These short DataStore writes must survive navigation away from this screen.
+    val appPersistenceScope = remember(settingsStore) {
+        CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    }
 
     LaunchedEffect(persistedBlacklist) {
-        if (persistedBlacklist != lastSavedBlacklist) {
+        if (blacklistSelection == lastSavedBlacklist) {
             blacklistSelection = persistedBlacklist
         }
         lastSavedBlacklist = persistedBlacklist
     }
 
     LaunchedEffect(persistedWhitelist) {
-        if (persistedWhitelist != lastSavedWhitelist) {
+        if (whitelistSelection == lastSavedWhitelist) {
             whitelistSelection = persistedWhitelist
         }
         lastSavedWhitelist = persistedWhitelist
@@ -368,7 +369,6 @@ fun ExceptionsTab(
 
     val closeAppsDialog = {
         showAppsDialog = false
-        appSaveJob?.cancel()
         val currentBlack = blacklistSelection
         val currentWhite = whitelistSelection
         val currentIsWhite = isWhitelist
@@ -376,13 +376,11 @@ fun ExceptionsTab(
         val whiteChanged = dialogSnapshotWhitelist != null && dialogSnapshotWhitelist != currentWhite
         val modeChanged = dialogSnapshotIsWhitelist != null && dialogSnapshotIsWhitelist != currentIsWhite
         if (blackChanged || whiteChanged || modeChanged) {
-            scope.launch {
-                if (blackChanged) {
-                    settingsStore.saveExcludedApps(currentBlack.sorted().joinToString(","))
-                }
-                if (whiteChanged) {
-                    settingsStore.saveWhitelistApps(currentWhite.sorted().joinToString(","))
-                }
+            appPersistenceScope.launch {
+                settingsStore.saveAppRoutingLists(
+                    currentBlack.sorted().joinToString(","),
+                    currentWhite.sorted().joinToString(","),
+                )
                 TunnelManager.reloadVpn()
             }
         }
@@ -431,6 +429,12 @@ fun ExceptionsTab(
     val routingMode = if (isWhitelist) RoutingMode.IncludeSelected else RoutingMode.ExcludeSelected
     val activeAppSelection = if (isWhitelist) whitelistSelection else blacklistSelection
 
+    // LazyColumn preserves its visible item by key after sorting. On reopening
+    // or changing mode, reset the viewport so the selected group is visible.
+    LaunchedEffect(showAppsDialog, isWhitelist, appSearchQuery) {
+        if (showAppsDialog) appListState.scrollToItem(0)
+    }
+
     val filteredApps = remember(appsList, appSearchQuery, activeAppSelection) {
         val base = if (appSearchQuery.isBlank()) {
             appsList
@@ -440,21 +444,19 @@ fun ExceptionsTab(
                     it.packageName.contains(appSearchQuery, ignoreCase = true)
             }
         }
-        base.sortedWith(
-            compareByDescending<AppItem> { it.packageName in activeAppSelection }
-                .thenBy { it.isSystem }
-                .thenBy { it.name.lowercase() }
-        )
+        selectedApplicationsFirst(base, activeAppSelection, { it.packageName }, { it.name })
     }
 
-    fun persistAppSelections(black: Set<String>?, white: Set<String>?) {
-        black?.let { lastSavedBlacklist = it }
-        white?.let { lastSavedWhitelist = it }
-        appSaveJob?.cancel()
-        appSaveJob = scope.launch {
-            delay(250)
-            black?.let { settingsStore.saveExcludedApps(it.sorted().joinToString(",")) }
-            white?.let { settingsStore.saveWhitelistApps(it.sorted().joinToString(",")) }
+    fun persistAppSelections(black: Set<String>?, white: Set<String>?, mode: Boolean? = null) {
+        val nextBlack = black ?: blacklistSelection
+        val nextWhite = white ?: whitelistSelection
+        appPersistenceScope.launch {
+            settingsStore.saveAppRoutingLists(
+                nextBlack.sorted().joinToString(","),
+                nextWhite.sorted().joinToString(","),
+                mode,
+            )
+            if (mode != null) TunnelManager.reloadVpn()
         }
     }
 
@@ -468,7 +470,6 @@ fun ExceptionsTab(
 
     DisposableEffect(Unit) {
         onDispose {
-            appSaveJob?.cancel()
             val pendingBlacklist = blacklistSelection
             val pendingWhitelist = whitelistSelection
             val blacklistChanged = pendingBlacklist != lastSavedBlacklist
@@ -476,13 +477,11 @@ fun ExceptionsTab(
             if (!blacklistChanged && !whitelistChanged) return@onDispose
             lastSavedBlacklist = pendingBlacklist
             lastSavedWhitelist = pendingWhitelist
-            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                if (blacklistChanged) {
-                    settingsStore.saveExcludedApps(pendingBlacklist.sorted().joinToString(","))
-                }
-                if (whitelistChanged) {
-                    settingsStore.saveWhitelistApps(pendingWhitelist.sorted().joinToString(","))
-                }
+            appPersistenceScope.launch {
+                settingsStore.saveAppRoutingLists(
+                    pendingBlacklist.sorted().joinToString(","),
+                    pendingWhitelist.sorted().joinToString(","),
+                )
             }
         }
     }
@@ -1953,7 +1952,6 @@ fun ExceptionsTab(
                                             } else {
                                                 appsObj.optBoolean("is_whitelist", isWhitelist)
                                             }
-                                            scope.launch { settingsStore.saveIsWhitelist(isWhite) }
                                             val newBlack = mutableSetOf<String>()
                                             val blackArr = appsObj.optJSONArray("blacklist")
                                             if (blackArr != null) {
@@ -1972,7 +1970,7 @@ fun ExceptionsTab(
                                             }
                                             blacklistSelection = newBlack
                                             whitelistSelection = newWhite
-                                            persistAppSelections(black = newBlack, white = newWhite)
+                                            persistAppSelections(black = newBlack, white = newWhite, mode = isWhite)
                                             importedAny = true
                                         }
                                         if (transferDomainsSelected && rootJson.has("domains")) {

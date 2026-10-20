@@ -126,6 +126,7 @@ class TunnelService : Service() {
 
         when (intent.action) {
             "START" -> {
+                if (isStopping) return START_NOT_STICKY
                 isStopping = false
                 resourcesReleased = false
                 startJob?.cancel()
@@ -284,12 +285,6 @@ class TunnelService : Service() {
                 }
             }
             "STOP", "DISCONNECT" -> {
-                autoPauseRequested = false
-                autoPausedForWifi = false
-                TunnelManager.leaveWifiAutoPause()
-                startJob?.cancel()
-                startJob = null
-                startGeneration++
                 stopTunnel(finishVkCalls = true)
             }
             CsqttConstants.General.ACTION_RESTART_WHEN_VK_REACHABLE -> verifyVkAndRestart()
@@ -353,6 +348,7 @@ class TunnelService : Service() {
     }
 
     private fun restoreTunnel(): Boolean {
+        if (isStopping || !serviceJob.isActive) return false
         startJob?.cancel()
         val requestGeneration = ++startGeneration
         isStopping = false
@@ -661,7 +657,7 @@ class TunnelService : Service() {
     private fun startTunnel(params: TunnelParams) {
         if (isStopping || !serviceJob.isActive) return
         autoPauseRequested = true
-        if (autoPauseOnWifiEnabled && hasPhysicalWifiNetwork()) {
+        if (autoPauseOnWifiEnabled && wifiConnectedForAutoPause()) {
             serviceScope.launch { reconcileWifiAutoPause() }
             return
         }
@@ -970,26 +966,31 @@ class TunnelService : Service() {
         startGeneration++
         if (isStopping) return
         isStopping = true
+        TunnelManager.stopping.value = true
         stopWifiAutoPauseWatch()
         autoPauseRequested = false
-        autoPausedForWifi = false
-        TunnelManager.leaveWifiAutoPause()
         TunnelManager.starting.value = false
         updateJob?.cancel()
         serviceScope.launch {
-            runCatching { SettingsStore(applicationContext).saveTunnelWasRunning(false) }
+            // An in-flight pause can be suspended in DataStore/manager cleanup.
+            // Finish manual shutdown after it; the final persisted intent is off.
+            autoPauseMutex.withLock {
+                autoPausedForWifi = false
+                TunnelManager.leaveWifiAutoPause()
+                runCatching { SettingsStore(applicationContext).saveTunnelWasRunning(false) }
+                releaseTunnelResources(finishVkCalls)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                foregroundStarted = false
+                stopSelf()
+            }
         }
-        releaseTunnelResources(finishVkCalls)
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        foregroundStarted = false
-        stopSelf()
     }
 
     private fun prepareForDeploy() {
         updateJob?.cancel()
         updateJob = null
         CaptchaWebViewManager.onTunnelStop()
-        TunnelManager.stop()
+        TunnelManager.stop(notifyController = false)
         releaseWifiLock()
     }
 
@@ -999,7 +1000,7 @@ class TunnelService : Service() {
         stopWifiAutoPauseWatch()
         CaptchaWebViewManager.onTunnelStop()
         if (finishVkCalls) VkAutoCallsManager.finishActiveCalls()
-        TunnelManager.stop(finishVkCalls)
+        TunnelManager.stop(finishVkCalls, notifyController = false)
         releaseWakeLock()
         releaseWifiLock()
     }
@@ -1049,25 +1050,27 @@ class TunnelService : Service() {
         }
     }
 
-    private suspend fun reconcileWifiAutoPause(): Boolean = autoPauseMutex.withLock {
-        if (isStopping) return@withLock autoPausedForWifi
-        when (
-            wifiAutoPauseAction(
-                enabled = autoPauseOnWifiEnabled,
-                wifiConnected = wifiConnectedForAutoPause(),
-                desiredRunning = autoPauseRequested,
-                paused = autoPausedForWifi,
-            )
-        ) {
-            WifiAutoPauseAction.PAUSE -> enterWifiAutoPause()
-            WifiAutoPauseAction.RESUME -> resumeFromWifiAutoPause()
-            WifiAutoPauseAction.NONE -> Unit
+    private suspend fun reconcileWifiAutoPause(): Boolean = runWifiAutoPauseTransition(serviceScope) {
+        autoPauseMutex.withLock {
+            if (isStopping) return@withLock autoPausedForWifi
+            when (
+                wifiAutoPauseAction(
+                    enabled = autoPauseOnWifiEnabled,
+                    wifiConnected = wifiConnectedForAutoPause(),
+                    desiredRunning = autoPauseRequested,
+                    paused = autoPausedForWifi,
+                )
+            ) {
+                WifiAutoPauseAction.PAUSE -> enterWifiAutoPause()
+                WifiAutoPauseAction.RESUME -> resumeFromWifiAutoPause()
+                WifiAutoPauseAction.NONE -> Unit
+            }
+            autoPausedForWifi
         }
-        autoPausedForWifi
     }
 
     private suspend fun enterWifiAutoPause() {
-        if (!autoPauseRequested || !autoPauseOnWifiEnabled || !hasPhysicalWifiNetwork()) return
+        if (!autoPauseRequested || !autoPauseOnWifiEnabled || !wifiConnectedForAutoPause()) return
         autoPausedForWifi = true
         updateJob?.cancel()
         updateJob = null
@@ -1083,8 +1086,12 @@ class TunnelService : Service() {
             vkProbeJobs.clear()
         }
         CaptchaWebViewManager.onTunnelStop()
-        SettingsStore(applicationContext).saveTunnelWasRunning(true)
-        TunnelManager.pauseForWifi()
+        val completed = completeWifiAutoPause(
+            isRequested = { autoPauseRequested && !isStopping },
+            saveRunningIntent = { SettingsStore(applicationContext).saveTunnelWasRunning(true) },
+            pauseDataPlane = { TunnelManager.pauseForWifi() },
+        )
+        if (!completed) return
         releaseWakeLock()
         releaseWifiLock()
         updateNotification("Ожидание. Автопауза при Wi-Fi")
@@ -1092,14 +1099,14 @@ class TunnelService : Service() {
     }
 
     private fun resumeFromWifiAutoPause() {
-        if (!autoPausedForWifi || !autoPauseRequested) return
+        if (!autoPausedForWifi || !autoPauseRequested || isStopping) return
         autoPausedForWifi = false
         stopWifiAutoPauseWatch()
         TunnelManager.leaveWifiAutoPause()
         acquireWakeLock()
         TunnelManager.updateLog(
             "wifi_auto_resume",
-            "[NET] Wi-Fi отключён · восстановление подключения",
+            "[NET] Автопауза Wi-Fi завершена · восстановление подключения",
             2,
             false,
             LogLevel.NET,
@@ -1150,14 +1157,15 @@ class TunnelService : Service() {
 
     private fun wifiConnectedForAutoPause(): Boolean {
         return effectiveWifiAutoPauseConnection(
-            paused = autoPausedForWifi,
             callbackWifiConnected = hasPhysicalWifiNetwork(),
             defaultPhysicalWifiConnected = defaultPhysicalWifiNetwork(),
         )
     }
 
     private fun defaultPhysicalWifiNetwork(): Boolean? {
-        val active = runCatching { connectivityManager.activeNetwork }.getOrNull() ?: return false
+        // During a handover/closing TUN, Android can briefly have no default.
+        // That is unknown, not proof that a still-present Wi-Fi disappeared.
+        val active = runCatching { connectivityManager.activeNetwork }.getOrNull() ?: return null
         val capabilities = runCatching { connectivityManager.getNetworkCapabilities(active) }.getOrNull()
             ?: return null
         if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null
@@ -1259,6 +1267,7 @@ class TunnelService : Service() {
                         wasEverRunning = wasEverUp,
                         running = running,
                         elapsedMs = SystemClock.elapsedRealtime() - startedAt,
+                        pausedForWifi = autoPausedForWifi,
                     )
                 ) {
                     stopTunnel()

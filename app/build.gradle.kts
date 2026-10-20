@@ -42,6 +42,14 @@ val releaseSigningProblems = mutableListOf<String>().apply {
 }
 val releaseSigningReady = releaseSigningProblems.isEmpty()
 
+val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+val selectedAbis = providers.gradleProperty("csqtt.abis").orNull
+    ?.split(',')?.map(String::trim)?.filter(String::isNotEmpty)?.distinct()
+    ?: supportedAbis
+require(selectedAbis.isNotEmpty() && selectedAbis.all { it in supportedAbis }) {
+    "csqtt.abis must contain supported ABIs: ${supportedAbis.joinToString()}"
+}
+
 val verifyReleaseSigning = tasks.register("verifyReleaseSigning") {
     group = "verification"
     description = "Verifies that a release build has an explicit, readable signing configuration."
@@ -72,17 +80,14 @@ android {
             useSupportLibrary = true
         }
 
-        ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
-        }
     }
 
     splits {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
-            isUniversalApk = true
+            include(*selectedAbis.toTypedArray())
+            isUniversalApk = selectedAbis.size > 1
         }
     }
 
@@ -101,6 +106,10 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".forktest"
+            versionNameSuffix = "-fork-test.3"
+        }
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
