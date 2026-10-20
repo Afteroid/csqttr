@@ -1,0 +1,25 @@
+# Gradle and Android
+.gradle/
+build/
+app/build/
+app/release/
+local.properties
+*.keystore
+*.jks
+
+# Rust / Cargo
+**/target/
+rust-server/dist/
+rust-server/build/
+*.log
+
+# IDE & Editor
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# CI scripts
+scripts/check_ci.py
