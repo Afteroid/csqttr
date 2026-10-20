@@ -37,7 +37,7 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
-        android:label="CSQTT"
+        android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.CSQTTClient">
@@ -78,7 +78,7 @@
             android:name=".QuickToggleTileService"
             android:exported="true"
             android:icon="@drawable/ic_c_logo"
-            android:label="CSQTT"
+            android:label="@string/app_name"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
@@ -91,7 +91,7 @@
                 android:value="true" />
             <meta-data
                 android:name="android.service.quicksettings.SEM_DEFAULT_TILE_NAME"
-                android:value="CSQTT" />
+                android:value="@string/app_name" />
         </service>
 
         <service

@@ -457,6 +457,10 @@ object TunnelManager {
                     activeScope.launch(Dispatchers.Main) {
                         if (!isCurrent(identity)) return@launch
                         val rule = parseServerRoutingRuleJson(routingJsonStr)
+                        if (rule == null) {
+                            handleCriticalError("Сервер передал некорректное правило маршрутизации", identity)
+                            return@launch
+                        }
                         val activeConf = config.value
                         var clientIp = ""
                         var dns = ""
@@ -641,8 +645,10 @@ object TunnelManager {
             } catch (_: Exception) {
                 null
             }
-            if (routingJsonStr != null) {
-                newServerRule = parseServerRoutingRuleJson(routingJsonStr)
+            newServerRule = routingJsonStr?.let(::parseServerRoutingRuleJson)
+            if (newServerRule == null) {
+                handleCriticalError("Сервер передал некорректное правило маршрутизации", identity)
+                return
             }
         }
         if (newServerRule != null || activeServerRoutingRule.value != null) {
@@ -1744,13 +1750,13 @@ object TunnelManager {
         }
     }
 
-    fun stop(finishVkCalls: Boolean = false) {
+    fun stop(finishVkCalls: Boolean = false, notifyController: Boolean = true) {
         val command = lifecycleCommand.incrementAndGet()
         stopping.value = true
         scope.launch {
             startStopMutex.withLock {
                 if (lifecycleCommand.get() != command) return@withLock
-                stopLocked(processIdentity, finishVkCalls)
+                stopLocked(processIdentity, finishVkCalls, notifyController = notifyController)
             }
         }
     }
@@ -1780,6 +1786,7 @@ object TunnelManager {
         identity: ProcessIdentity?,
         finishVkCalls: Boolean = false,
         preserveWifiAutoPause: Boolean = false,
+        notifyController: Boolean = true,
     ) {
         stopping.value = true
         lifecycleState.requestStop()
@@ -1796,10 +1803,18 @@ object TunnelManager {
         panelRestartPending.set(false)
         transportRestartPending.set(false)
         activeContext()?.let { ctx ->
-            val stopIntent = Intent(ctx, TunVpnService::class.java).apply { action = "STOP" }
-            try { ctx.startService(stopIntent) } catch (_: Exception) {}
-            val stopTunnelIntent = Intent(ctx, TunnelService::class.java).apply { action = "STOP" }
-            try { ctx.startService(stopTunnelIntent) } catch (_: Exception) {}
+            dispatchTunnelStop(
+                preserveWifiAutoPause = preserveWifiAutoPause,
+                notifyController = notifyController,
+                stopVpn = {
+                    val stopIntent = Intent(ctx, TunVpnService::class.java).apply { action = "STOP" }
+                    try { ctx.startService(stopIntent) } catch (_: Exception) {}
+                },
+                stopController = {
+                    val stopIntent = Intent(ctx, TunnelService::class.java).apply { action = "STOP" }
+                    try { ctx.startService(stopIntent) } catch (_: Exception) {}
+                },
+            )
         }
         terminateProcessLocked(identity, finishVkCalls)
         running.value = false
@@ -1926,50 +1941,8 @@ object TunnelManager {
         return ManlCaptchaWebViewManager.solveCaptchaAsync(ctx, redirectUri, sessionToken)
     }
 
-    fun parseServerRoutingRuleJson(routingJsonStr: String): ServerRoutingRule? {
-        return try {
-            val json = org.json.JSONObject(routingJsonStr)
-            val mode = json.optString("mode", "blacklist")
-            val isWhite = json.optBoolean("domains_is_whitelist", mode == "whitelist")
-            val packagesJson = json.optJSONArray("packages")
-            val packagesList = mutableListOf<String>()
-            if (packagesJson != null) {
-                for (i in 0 until packagesJson.length()) {
-                    val p = packagesJson.optString(i).trim()
-                    if (p.isNotEmpty()) packagesList.add(p)
-                }
-            }
-            val domainsJson = json.optJSONArray("domains")
-            val domainsList = mutableListOf<String>()
-            if (domainsJson != null) {
-                for (i in 0 until domainsJson.length()) {
-                    val d = domainsJson.optString(i).trim()
-                    if (d.isNotEmpty()) domainsList.add(d)
-                }
-            }
-            val templateDomains = json.optBoolean("template_domains", false)
-            val ipMode = json.optString("ip_mode", "blacklist")
-            val ipIsWhite = json.optBoolean("ip_is_whitelist", ipMode == "whitelist")
-            val ipsJson = json.optJSONArray("ips")
-            val ipsList = mutableListOf<String>()
-            if (ipsJson != null) {
-                for (i in 0 until ipsJson.length()) {
-                    val ip = ipsJson.optString(i).trim()
-                    if (ip.isNotEmpty()) ipsList.add(ip)
-                }
-            }
-            ServerRoutingRule(
-                isWhite = isWhite,
-                packages = packagesList,
-                domains = domainsList,
-                templateDomains = templateDomains,
-                ipIsWhite = ipIsWhite,
-                ips = ipsList,
-            )
-        } catch (_: Exception) {
-            null
-        }
-    }
+    fun parseServerRoutingRuleJson(routingJsonStr: String): ServerRoutingRule? =
+        parseServerRoutingRule(routingJsonStr)
 
     fun applyServerRoutingRule(newServerRule: ServerRoutingRule?, clientIp: String, dns: String) {
         val previousRule = activeServerRoutingRule.value
@@ -1983,7 +1956,7 @@ object TunnelManager {
                     excludeRuZones = false,
                     templateDomains = newServerRule.templateDomains,
                     directDomains = newServerRule.domains.joinToString(","),
-                    isWhitelist = newServerRule.isWhite,
+                    isWhitelist = newServerRule.domainsIsWhite,
                     ipRoutingEnabled = newServerRule.ips.isNotEmpty(),
                     ipIsWhitelist = newServerRule.ipIsWhite,
                     directIps = newServerRule.ips.joinToString(","),
@@ -2164,13 +2137,4 @@ data class TunnelParams(
     val ipRoutingEnabled: Boolean = false,
     val ipIsWhitelist: Boolean = false,
     val directIps: String = "",
-)
-
-data class ServerRoutingRule(
-    val isWhite: Boolean,
-    val packages: List<String>,
-    val domains: List<String>,
-    val templateDomains: Boolean,
-    val ipIsWhite: Boolean = false,
-    val ips: List<String> = emptyList(),
 )

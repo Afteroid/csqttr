@@ -11,7 +11,7 @@ class DeployScriptPreflightTest {
             File("app/src/main/assets/deploy.sh"),
             File("src/main/assets/deploy.sh"),
         )
-        return candidates.first(File::isFile).readText()
+        return candidates.first(File::isFile).readText().replace("\r\n", "\n")
     }
 
     private fun deployOperations(): String {
@@ -19,7 +19,7 @@ class DeployScriptPreflightTest {
             File("app/src/main/java/com/csqtt/client/ui/DeployOperations.kt"),
             File("src/main/java/com/csqtt/client/ui/DeployOperations.kt"),
         )
-        return candidates.first(File::isFile).readText()
+        return candidates.first(File::isFile).readText().replace("\r\n", "\n")
     }
 
     @Test

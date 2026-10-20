@@ -212,7 +212,9 @@ internal fun ConnectionTab(
     }
 
     fun toggleTunnel() {
-        if (tunnelRunning || tunnelStarting || autoPausedForWifi) {
+        if (TunnelManager.stopping.value) return
+        if (com.csqtt.client.tunnelPowerIsOn(TunnelManager.running.value, TunnelManager.starting.value, TunnelManager.autoPausedForWifi.value)) {
+            pendingStartAfterVpnPermission = false
             context.startService(Intent(context, TunnelService::class.java).apply { action = "STOP" })
             return
         }
@@ -294,8 +296,8 @@ private fun TunnelConnectionPanel(
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val statusText = when {
+        tunnelStopping -> "Остановка"
         autoPausedForWifi -> "Ожидание. Автопауза при Wi-Fi"
-        tunnelStopping -> "Ожидание"
         tunnelRunning -> "Подключено"
         isStarting -> "Подключение"
         cooldownActive -> "Ожидание"

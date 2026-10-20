@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("Write", "Verify")]
     [string]$Mode,
-    [string]$Root
+    [string]$Root,
+    [ValidateSet("arm64-v8a", "armeabi-v7a", "x86_64")]
+    [string[]]$Abis = @("arm64-v8a", "armeabi-v7a", "x86_64")
 )
 
 Set-StrictMode -Version Latest
@@ -54,6 +56,9 @@ $specs = @(
         ElfMachine = 62
     }
 )
+
+$specs = @($specs | Where-Object { $_.Abi -in $Abis })
+if ($specs.Count -eq 0) { throw "At least one ABI must be selected" }
 
 function Assert-RegularFile {
     param([string]$Path, [string]$Label)
@@ -114,7 +119,9 @@ function Get-BuildInputHash {
     }
     $rootPrefix = $projectRoot.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
     $builder = New-Object Text.StringBuilder
-    foreach ($file in @($files | Sort-Object -Unique)) {
+    $sortedFiles = [string[]]@($files | Select-Object -Unique)
+    [Array]::Sort($sortedFiles, [StringComparer]::Ordinal)
+    foreach ($file in $sortedFiles) {
         $fullPath = [IO.Path]::GetFullPath($file)
         if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Native build input escaped project root: $fullPath"

@@ -6,6 +6,18 @@ import org.junit.Test
 
 class TunnelServicePolicyTest {
     @Test
+    fun intentionalWifiPauseKeepsServiceAliveEvenAfterStartupGrace() {
+        for (wasRunning in listOf(false, true)) {
+            assertFalse(TunnelServicePolicy.shouldStop(
+                wasEverRunning = wasRunning,
+                running = false,
+                elapsedMs = TunnelServicePolicy.STARTUP_GRACE_MS * 2,
+                pausedForWifi = true,
+            ))
+        }
+    }
+
+    @Test
     fun startupDoesNotStopBeforeGracePeriod() {
         assertFalse(
             TunnelServicePolicy.shouldStop(

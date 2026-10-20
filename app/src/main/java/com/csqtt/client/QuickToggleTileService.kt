@@ -42,10 +42,9 @@ class QuickToggleTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        val running = TunnelManager.running.value
         scope.launch {
             try {
-                toggleTunnelFromQuickAction(this@QuickToggleTileService, running) { openMainActivity() }
+                toggleTunnelFromQuickAction(this@QuickToggleTileService) { openMainActivity() }
             } catch (e: Exception) {
                 Log.e("QuickToggleTile", "Failed to toggle tunnel via QS tile", e)
                 this@QuickToggleTileService.showRaisedToast("Ошибка запуска: ${e.localizedMessage}", Toast.LENGTH_SHORT)
