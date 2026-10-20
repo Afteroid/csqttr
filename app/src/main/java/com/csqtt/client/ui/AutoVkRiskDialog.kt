@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,10 +8,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,7 +24,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.csqtt.client.ui.design.CsqttShapes
+import com.csqtt.client.ui.design.CsqttSizes
 import kotlinx.coroutines.delay
 
 @Composable
@@ -85,65 +87,78 @@ private fun TimedWarningDialog(
     }
     val actionsEnabled = secondsLeft == 0
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = {},
         properties = DialogProperties(
             dismissOnBackPress = false,
             dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
         ),
-        title = {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-        },
-        text = {
+    ) {
+        Surface(
+            shape = CsqttShapes.Dialog,
+            color = appSectionCardColor(),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = BorderStroke(1.dp, appSectionCardBorderColor()),
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth(0.92f),
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
                 paragraphs.forEach { paragraph ->
                     Text(
                         text = paragraph,
-                        style = MaterialTheme.typography.bodyMedium.copy(hyphens = Hyphens.Auto),
-                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodySmall.copy(hyphens = Hyphens.Auto),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 16.sp,
                         textAlign = TextAlign.Start,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-            }
-        },
-        confirmButton = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (onDoNotRemind != null) {
-                    OutlinedButton(
-                        onClick = onDoNotRemind,
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (onDoNotRemind != null) {
+                        OutlinedButton(
+                            onClick = onDoNotRemind,
+                            enabled = actionsEnabled,
+                            modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
+                            shape = CsqttShapes.Pill,
+                        ) {
+                            Text("Не напоминать", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    Button(
+                        onClick = onAcknowledge,
                         enabled = actionsEnabled,
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
+                        shape = CsqttShapes.Pill,
                     ) {
-                        Text("Не напоминать")
+                        Text("Понятно", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (!actionsEnabled) {
+                        Text(
+                            text = secondsLeft.toString(),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
-                Button(
-                    onClick = onAcknowledge,
-                    enabled = actionsEnabled,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                ) {
-                    Text("Понятно")
-                }
-                if (!actionsEnabled) {
-                    Text(
-                        text = secondsLeft.toString(),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-                    )
-                }
             }
-        },
-    )
+        }
+    }
 }

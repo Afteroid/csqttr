@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import android.annotation.SuppressLint
@@ -173,6 +170,8 @@ class ManlCaptchaActivity : ComponentActivity() {
                                                 loadWithOverviewMode = true
                                                 useWideViewPort = true
                                                 blockNetworkLoads = false
+                                                allowFileAccess = false
+                                                allowContentAccess = false
                                                 cacheMode = WebSettings.LOAD_DEFAULT
                                             }
 

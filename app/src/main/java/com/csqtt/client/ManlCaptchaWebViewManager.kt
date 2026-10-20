@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import android.app.NotificationChannel
@@ -46,7 +43,8 @@ object ManlCaptchaWebViewManager {
     }
 
     fun cancelCaptcha() {
-        pendingResult.get()?.completeExceptionally(CancellationException("Cancelled by system"))
+        isCaptchaPending = false
+        pendingResult.getAndSet(null)?.completeExceptionally(CancellationException("Cancelled by system"))
     }
 
     private const val NOTIFICATION_ID = CsqttConstants.Notifications.CAPTCHA_NOTIFICATION_ID

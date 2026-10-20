@@ -1,18 +1,6 @@
-@REM SPDX-FileCopyrightText: 2026 amurcanov
-@REM SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 @echo off
 setlocal enabledelayedexpansion
 
-:: Find Android SDK and export SDK_PATH to the caller.
-:: Usage (inside a script with enabledelayedexpansion):
-::   set "PROJECT_ROOT=..."
-::   call scripts\find_android_sdk.bat
-::
-:: Search order:
-::   ANDROID_HOME -> ANDROID_SDK_ROOT -> local.properties sdk.dir ->
-::   %%LOCALAPPDATA%%\Android\Sdk -> %%ProgramFiles%%\Android\android-sdk ->
-::   %%ProgramFiles(x86)%%\Android\android-sdk
 
 set "SDK_PATH="
 

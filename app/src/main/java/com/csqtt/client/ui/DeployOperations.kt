@@ -1,15 +1,12 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import android.content.Context
 import com.csqtt.client.CsqttConstants
 import com.csqtt.client.DeployManager
+import com.csqtt.client.SshHostKeyStore
 import com.csqtt.client.TunnelManager
 import net.schmizz.sshj.SSHClient as SshjClient
 import net.schmizz.sshj.xfer.FileSystemFile
-import net.schmizz.sshj.transport.verification.PromiscuousVerifier
 import net.schmizz.sshj.userauth.UserAuthException
 import net.schmizz.sshj.userauth.method.AuthKeyboardInteractive
 import net.schmizz.sshj.userauth.method.PasswordResponseProvider
@@ -32,11 +29,6 @@ private const val CMD_TIMEOUT = CsqttConstants.Timeouts.DEPLOY_CMD_TIMEOUT_MS
 private const val SFTP_UPLOAD_ATTEMPTS = 2
 private const val UPLOAD_RECONNECT_ATTEMPTS = 1
 
-/**
- * SSH passwords are protocol data, not shell text. Spaces and punctuation are
- * valid and must arrive at SSHJ unchanged; only pasted line breaks are removed
- * because neither password SSH nor sudo can represent them as one prompt.
- */
 internal fun sanitizeSshPassword(value: String): String =
     value.replace("\r", "").replace("\n", "")
 
@@ -383,7 +375,7 @@ private class DeploySSHClient(
             try {
                 DeployManager.writeError("Falling back to chunked stream upload for ${localFile.name}...")
                 val tempRemote = "$remotePath.tmp"
-                execResult(rootCommand("rm -f '$tempRemote'"), 30000L)
+                execResult(rootCommand("rm -f '$tempRemote'", sudoPass), 30000L)
                 localFile.inputStream().buffered(64 * 1024).use { inputStream ->
                     val buffer = ByteArray(64 * 1024)
                     var bytesRead: Int
@@ -393,7 +385,7 @@ private class DeploySSHClient(
                         val chunk = if (bytesRead == buffer.size) buffer else buffer.copyOf(bytesRead)
                         val base64 = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP)
                         val cmd = "printf '%s' '$base64' | base64 -d >> '$tempRemote'"
-                        val res = execResult(rootCommand(cmd), 60000L)
+                        val res = execResult(rootCommand(cmd, sudoPass), 60000L)
                         if (res.exitStatus != 0) {
                             throw IOException("Chunk upload failed at offset $totalUploaded")
                         }
@@ -402,7 +394,7 @@ private class DeploySSHClient(
                         DeployManager.updateProgress(percent * 0.5f, "Загрузка: $label (${(percent * 100).toInt()}%)")
                     }
                 }
-                val moveRes = execResult(rootCommand("mv -f '$tempRemote' '$remotePath' && chmod 0755 '$remotePath'"), 30000L)
+                val moveRes = execResult(rootCommand("mv -f '$tempRemote' '$remotePath' && chmod 0755 '$remotePath'", sudoPass), 30000L)
                 if (moveRes.exitStatus == 0) {
                     TunnelManager.addDeploySuccessLog("Загружено (Stream): $label")
                     return
@@ -434,6 +426,7 @@ private fun ensureBouncyCastle() {
 }
 
 private fun createSSHClient(
+    context: Context,
     host: String,
     user: String,
     pass: String,
@@ -451,7 +444,7 @@ private fun createSSHClient(
     val ssh = SshjClient()
     ssh.connectTimeout = 30000
     ssh.timeout = 300000
-    ssh.addHostKeyVerifier(PromiscuousVerifier())
+    ssh.addHostKeyVerifier(SshHostKeyStore.TofuVerifier(context))
 
     try {
         ssh.connect(host, port)
@@ -480,14 +473,9 @@ private fun createSSHClient(
         }
     } else {
         try {
-            // `authPassword` carries the exact Kotlin String to SSHJ, which
-            // is important for passwords containing spaces or punctuation.
             ssh.authPassword(user, pass)
         } catch (passwordError: UserAuthException) {
             try {
-                // Some hosting panels expose password auth only through the
-                // keyboard-interactive method. Use a fresh character array;
-                // a one-off provider may consume its input while answering.
                 ssh.auth(
                     user,
                     listOf(
@@ -537,17 +525,23 @@ internal fun deployEnvironmentValue(value: String, installInDocker: Boolean): St
 internal fun deployMode(installInDocker: Boolean): String =
     if (installInDocker) "docker" else "systemd"
 
-private fun rootCommand(command: String): String {
+private fun rootCommand(command: String, password: String? = null): String {
     val quoted = shellQuote(command)
+    val sudoCmd = if (!password.isNullOrEmpty()) {
+        val passQuoted = shellQuote(password)
+        "printf '%s\\n' $passQuoted | sudo -S -p '' bash -c $quoted"
+    } else {
+        "sudo -S -p '' bash -c $quoted"
+    }
     return "if [ \"\$(id -u)\" = \"0\" ]; then bash -c $quoted; " +
-        "elif command -v sudo >/dev/null 2>&1; then sudo bash -c $quoted; " +
+        "elif command -v sudo >/dev/null 2>&1; then $sudoCmd; " +
         "else echo 'error: root privileges required and sudo not found'; exit 1; fi"
 }
 
 private val BENIGN_STDERR = Regex(
     "debconf|dpkg-preconfigure|TERM is not set|falling back to frontend|" +
     "unable to re-open stdin|controlling tty|unable to initialize frontend|" +
-    "^Warning:|frontend:\\s*(Readline|Teletype|Dialog)",
+    "^Warning:|frontend:\\s*(Readline|Teletype|Dialog)|\\[sudo\\] password for",
     RegexOption.IGNORE_CASE
 )
 
@@ -563,6 +557,7 @@ internal suspend fun performDeploy(
     keyPassphrase: String = "",
     certificate: String = "",
     installInDocker: Boolean = false,
+    secretPath: String = "",
 ): Boolean = withContext(Dispatchers.IO) {
     var ssh: SshjClient? = null
     var tempDir: File? = null
@@ -572,12 +567,12 @@ internal suspend fun performDeploy(
 
         TunnelManager.addDeployInfoLog("SSH/SFTP используют текущий системный маршрут")
         TunnelManager.addDeployInfoLog("Подключение к VPS по SSH")
-        val initialSsh = createSSHClient(host, user, pass, port, privateKey, keyPassphrase)
+        val initialSsh = createSSHClient(context, host, user, pass, port, privateKey, keyPassphrase)
         ssh = initialSsh
         DeployManager.activeSession = initialSsh
         val sshClient = DeploySSHClient(initialSsh, pass) { stage ->
             TunnelManager.addDeployInfoLog("Повторное SSH-подключение: $stage")
-            createSSHClient(host, user, pass, port, privateKey, keyPassphrase).also {
+            createSSHClient(context, host, user, pass, port, privateKey, keyPassphrase).also {
                 ssh = it
             }
         }
@@ -592,7 +587,6 @@ internal suspend fun performDeploy(
 
         onProgress(0.05f, "Подготовка файлов...")
         TunnelManager.addDeployInfoLog("Подготовка файлов установки")
-        val deviceId = TunnelManager.readDeviceId(context)
 
         val workingDir = File(context.cacheDir, "deploy-${System.nanoTime()}")
         tempDir = workingDir
@@ -617,6 +611,10 @@ internal suspend fun performDeploy(
                 buildString {
                     appendLine("CSQTT_WEB_USER=${deployEnvironmentValue(webLogin, installInDocker)}")
                     appendLine("CSQTT_WEB_PASS=${deployEnvironmentValue(webPass, installInDocker)}")
+                    appendLine("CSQTT_PUBLIC_IP=${deployEnvironmentValue(host.trim(), installInDocker)}")
+                    if (secretPath.isNotBlank()) {
+                        appendLine("CSQTT_WEB_SECRET_PATH=${deployEnvironmentValue(secretPath.trim(), installInDocker)}")
+                    }
                 }
             )
         }
@@ -624,7 +622,6 @@ internal suspend fun performDeploy(
             writeText(
                 JSONObject()
                     .put("main_password", mainPass)
-                    .put("device_id", deviceId)
                     .toString()
             )
         }
@@ -633,8 +630,9 @@ internal suspend fun performDeploy(
         onProgress(0.06f, "Подготовка сервера...")
         sshClient.upload(scriptFile, "/tmp/deploy.sh")
 
+        val secretEnv = if (secretPath.isNotBlank()) "CSQTT_WEB_SECRET_PATH=${deployEnvironmentValue(secretPath.trim(), false)} " else ""
         val deployEnvironment =
-            "env CSQTT_PEER_PORT=$peerPort CSQTT_SSH_PORT=$port CSQTT_WEB_PORT=$webPort " +
+            "env ${secretEnv}CSQTT_PEER_PORT=$peerPort CSQTT_SSH_PORT=$port CSQTT_WEB_PORT=$webPort CSQTT_PUBLIC_IP=${host.trim()} " +
                 "CSQTT_DEPLOY_MODE=${deployMode(installInDocker)}"
         onProgress(0.10f, "Загрузка нового сервера...")
         sshClient.upload(serverFile, "/tmp/.csqtt-upload-server")
@@ -644,7 +642,7 @@ internal suspend fun performDeploy(
         onProgress(0.18f, "Установка нового сервера...")
         TunnelManager.addDeployInfoLog("Запуск установщика на VPS")
         val deployResult = sshClient.execResult(
-            rootCommand("$deployEnvironment bash /tmp/deploy.sh install"),
+            rootCommand("$deployEnvironment bash /tmp/deploy.sh install", pass),
             timeout = CMD_TIMEOUT
         )
         val output = deployResult.output
@@ -706,7 +704,7 @@ internal suspend fun performUninstall(
         onProgress(0.05f, "Подключение...")
         TunnelManager.addDeployInfoLog("SSH/SFTP используют текущий системный маршрут")
         TunnelManager.addDeployInfoLog("Подключение к VPS по SSH")
-        ssh = createSSHClient(host, user, pass, port, privateKey, keyPassphrase)
+        ssh = createSSHClient(context, host, user, pass, port, privateKey, keyPassphrase)
         DeployManager.activeSession = ssh
         val sshClient = DeploySSHClient(ssh, pass)
         TunnelManager.addDeploySuccessLog("SSH-соединение установлено")
@@ -725,7 +723,7 @@ internal suspend fun performUninstall(
         onProgress(0.30f, "Удаление через deploy.sh...")
         TunnelManager.addDeployInfoLog("Запуск серверного удаления")
         sshClient.exec(
-            rootCommand("env CSQTT_PEER_PORT=$peerPort CSQTT_SSH_PORT=$port bash /tmp/deploy.sh uninstall"),
+            rootCommand("env CSQTT_PEER_PORT=$peerPort CSQTT_SSH_PORT=$port bash /tmp/deploy.sh uninstall", pass),
             timeout = 30000L,
         )
 

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
@@ -66,25 +63,25 @@ fun CsqttScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_csqtt_logo),
-                    contentDescription = "CSQTT",
-                    tint = Color.Unspecified,
-                    modifier = Modifier.height(26.dp)
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                    horizontalAlignment = Alignment.Start
                 ) {
                     Icon(
-                        painter = painterResource(id = R.drawable.ic_v219_by_amurcanov),
-                        contentDescription = "v2.1.9 by amurcanov",
+                        painter = painterResource(id = R.drawable.ic_csqtt_logo),
+                        contentDescription = "CSQTT",
                         tint = Color.Unspecified,
-                        modifier = Modifier.height(19.dp)
+                        modifier = Modifier.height(22.dp)
                     )
-                    headerActions?.let { Row(content = it) }
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_v250_by_amurcanov),
+                        contentDescription = "v2.5.0 by amurcanov",
+                        tint = Color.Unspecified,
+                        modifier = Modifier.height(13.dp)
+                    )
                 }
+
+                headerActions?.let { Row(content = it) }
             }
             if (!title.isNullOrBlank() || actions != null) {
                 Row(

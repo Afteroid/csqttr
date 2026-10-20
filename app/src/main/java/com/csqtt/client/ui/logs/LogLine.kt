@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import androidx.compose.foundation.BorderStroke
@@ -14,9 +11,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -89,6 +89,45 @@ private fun parseMessageTag(rawMessage: String, level: LogLevel): Pair<String, S
     return level.name to trimmed
 }
 
+private fun parseAnsiLogBody(
+    text: String,
+    defaultColor: Color,
+    greenColor: Color,
+    redColor: Color,
+): AnnotatedString {
+    val ansiRegex = Regex("\u001B\\[([0-9;]+)m")
+    if (!text.contains("\u001B[")) {
+        return AnnotatedString(text)
+    }
+    val builder = AnnotatedString.Builder()
+    var currentIndex = 0
+    var currentColor = defaultColor
+
+    for (match in ansiRegex.findAll(text)) {
+        if (match.range.first > currentIndex) {
+            val segment = text.substring(currentIndex, match.range.first)
+            builder.pushStyle(SpanStyle(color = currentColor))
+            builder.append(segment)
+            builder.pop()
+        }
+        val code = match.groupValues[1]
+        currentColor = when (code) {
+            "32", "92" -> greenColor
+            "31", "91" -> redColor
+            "0" -> defaultColor
+            else -> currentColor
+        }
+        currentIndex = match.range.last + 1
+    }
+    if (currentIndex < text.length) {
+        val segment = text.substring(currentIndex)
+        builder.pushStyle(SpanStyle(color = currentColor))
+        builder.append(segment)
+        builder.pop()
+    }
+    return builder.toAnnotatedString()
+}
+
 @Composable
 internal fun LogLine(
     entry: LogEntry,
@@ -116,12 +155,21 @@ internal fun LogLine(
         else -> terminalColors.terminalText
     }
 
+    val annotatedBody = remember(body, bodyColor, terminalColors.terminalSuccess, terminalColors.terminalError) {
+        parseAnsiLogBody(
+            text = body,
+            defaultColor = bodyColor,
+            greenColor = terminalColors.terminalSuccess,
+            redColor = terminalColors.terminalError,
+        )
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(CsqttSpacing.Sm),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
         Surface(
             shape = CsqttShapes.Pill,
@@ -148,7 +196,7 @@ internal fun LogLine(
         }
 
         Text(
-            text = body,
+            text = annotatedBody,
             color = bodyColor,
             style = MaterialTheme.typography.bodySmall.copy(
                 fontSize = 12.sp,

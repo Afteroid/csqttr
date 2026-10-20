@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import org.junit.Assert.assertEquals
@@ -23,5 +20,13 @@ class MainNavigationSwipeTest {
         assertFalse(shouldCommitNavigationSwipe(0.4f))
         assertTrue(shouldCommitNavigationSwipe(0.4001f))
         assertTrue(shouldCommitNavigationSwipe(1f))
+    }
+
+    @Test
+    fun participantModeFiltersDeployAndLogsByDefault() {
+        assertEquals(listOf(0, 1, 2, 3, 4), resolveActiveNavIds(csqttLinkMode = false, participantShowLogs = false))
+        assertEquals(listOf(0, 1, 2, 3, 4), resolveActiveNavIds(csqttLinkMode = false, participantShowLogs = true))
+        assertEquals(listOf(0, 1, 4), resolveActiveNavIds(csqttLinkMode = true, participantShowLogs = false))
+        assertEquals(listOf(0, 1, 3, 4), resolveActiveNavIds(csqttLinkMode = true, participantShowLogs = true))
     }
 }

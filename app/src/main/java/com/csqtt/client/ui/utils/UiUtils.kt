@@ -1,28 +1,107 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui.utils
+
+import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 data class CsqttLink(
     val host: String,
     val port: Int,
-    val password: String,
+    val password: String = "",
     val hashes: List<String> = emptyList(),
+    val vkAccessToken: String = "",
 )
+
+private const val CSQTT_CIPHER_KEY_SEED = "csqtt-chiper-key"
+
+private val cipherKey: SecretKeySpec by lazy {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val keyBytes = digest.digest(CSQTT_CIPHER_KEY_SEED.toByteArray(Charsets.UTF_8))
+    SecretKeySpec(keyBytes, "AES")
+}
+
+fun decodeBase64Safe(input: String): ByteArray? {
+    val clean = input.replace("\n", "").replace("\r", "").replace(" ", "").trim()
+    return runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            runCatching { java.util.Base64.getUrlDecoder().decode(clean) }
+                .getOrElse { java.util.Base64.getDecoder().decode(clean) }
+        } else {
+            android.util.Base64.decode(clean, android.util.Base64.DEFAULT or android.util.Base64.URL_SAFE)
+        }
+    }.recoverCatching {
+        runCatching { java.util.Base64.getUrlDecoder().decode(clean) }
+            .getOrElse { java.util.Base64.getDecoder().decode(clean) }
+    }.getOrNull()
+}
+
+fun decryptCsqttPayload(rawPayload: String): String? {
+    val bytes = decodeBase64Safe(rawPayload) ?: return null
+    if (bytes.size >= 28) {
+        val decrypted = runCatching {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val spec = GCMParameterSpec(128, bytes, 0, 12)
+            cipher.init(Cipher.DECRYPT_MODE, cipherKey, spec)
+            val plaintext = cipher.doFinal(bytes, 12, bytes.size - 12)
+            String(plaintext, Charsets.UTF_8)
+        }.getOrNull()
+        if (decrypted != null) {
+            return decrypted
+        }
+    }
+    return null
+}
+
+fun encryptCsqttPayload(plaintext: String): String {
+    val iv = runCatching {
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(cipherKey)
+        val hmacBytes = mac.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+        ByteArray(12).apply { System.arraycopy(hmacBytes, 0, this, 0, 12) }
+    }.getOrElse {
+        ByteArray(12).apply { java.security.SecureRandom().nextBytes(this) }
+    }
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    val spec = GCMParameterSpec(128, iv)
+    cipher.init(Cipher.ENCRYPT_MODE, cipherKey, spec)
+    val ciphertextAndTag = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+    val combined = ByteArray(12 + ciphertextAndTag.size)
+    System.arraycopy(iv, 0, combined, 0, 12)
+    System.arraycopy(ciphertextAndTag, 0, combined, 12, ciphertextAndTag.size)
+    return runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(combined)
+        } else {
+            android.util.Base64.encodeToString(
+                combined,
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+            ).trim()
+        }
+    }.recoverCatching {
+        java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(combined)
+    }.getOrElse { "" }
+}
 
 fun parseCsqttLink(raw: String): CsqttLink? {
     val trimmed = raw.trim()
     if (!trimmed.startsWith("csqtt://", ignoreCase = true)) return null
-    val uri = runCatching { java.net.URI(trimmed) }.getOrNull() ?: return null
-    if (!uri.scheme.equals("csqtt", ignoreCase = true) || uri.rawFragment != null) return null
-    if (uri.host.equals("connect", ignoreCase = true)) {
-        return parseCsqttV2(uri)
+    val payload = trimmed.substring(8).trim()
+    val decoded = decryptCsqttPayload(payload) ?: return null
+    if (decoded.contains("host=") || decoded.contains("connect?")) {
+        val candidate = when {
+            decoded.startsWith("csqtt://connect?", ignoreCase = true) -> decoded
+            decoded.startsWith("connect?", ignoreCase = true) -> "csqtt://$decoded"
+            decoded.startsWith("csqtt://", ignoreCase = true) -> "csqtt://connect?" + decoded.substring(8)
+            else -> "csqtt://connect?$decoded"
+        }
+        val decodedUri = runCatching { java.net.URI(candidate) }.getOrNull()
+        if (decodedUri != null) {
+            val parsed = parseCsqttV2(decodedUri)
+            if (parsed != null) return parsed
+        }
     }
-    val host = uri.host?.takeIf { it.isNotBlank() } ?: return null
-    val port = uri.port
-    val password = uri.userInfo?.takeIf { it.isNotBlank() } ?: return null
-    if (port !in 1..65535) return null
-    return CsqttLink(host, port, password)
+    return null
 }
 
 fun CsqttLink.peerAddress(): String {
@@ -35,12 +114,16 @@ private fun parseCsqttV2(uri: java.net.URI): CsqttLink? {
     val parameters = parseRawQuery(uri.rawQuery ?: return null) ?: return null
     if (parameters["v"]?.let(::decodeQueryComponent) != "2") return null
     val host = parameters["host"]?.let(::decodeQueryComponent)?.takeIf { it.isNotBlank() } ?: return null
+    if (host == "0.0.0.0" || host == "127.0.0.1" || host.equals("localhost", ignoreCase = true) || host == "::1") return null
     val port = parameters["peer"]?.let(::decodeQueryComponent)?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
-    val password = parameters["password"]?.let(::decodeQueryComponent)?.takeIf { it.isNotBlank() } ?: return null
-    if (host.any(Char::isWhitespace) || password.any(Char::isWhitespace)) return null
+    val password = parameters["password"]?.let(::decodeQueryComponent)?.trim().orEmpty()
+    if (host.any(Char::isWhitespace) || (password.isNotEmpty() && password.any(Char::isWhitespace))) return null
     val hashes = parameters["hashes"]?.let(::parseLinkHashes) ?: emptyList()
     if (parameters.containsKey("hashes") && hashes.isEmpty()) return null
-    return CsqttLink(host, port, password, hashes)
+    val vkAccessToken = parameters["token"]?.let(::parseLinkVkAccessToken).orEmpty()
+    if (parameters.containsKey("token") && vkAccessToken.isEmpty()) return null
+    if (hashes.isNotEmpty() && vkAccessToken.isNotEmpty()) return null
+    return CsqttLink(host, port, password, hashes, vkAccessToken)
 }
 
 private fun parseRawQuery(rawQuery: String): Map<String, String>? {
@@ -55,24 +138,26 @@ private fun parseRawQuery(rawQuery: String): Map<String, String>? {
             val key = decodeQueryComponent(part.substring(0, separator)) ?: continue
             val value = part.substring(separator + 1)
             if (key.isNotBlank()) {
+                if (result.containsKey(key)) return null
                 result[key] = value
             }
         }
-        if (result.isNotEmpty() && result.containsKey("v") && result.containsKey("host") && result.containsKey("peer") && result.containsKey("password")) {
+        if (result.isNotEmpty() && result.containsKey("v") && result.containsKey("host") && result.containsKey("peer")) {
             return result
         }
     }
 
-    val pattern = Regex("(?:^|[&;]|(?<=[a-zA-Z0-9_]))(v|host|peer|password|hashes)=([^&?]*?)(?=(?:v|host|peer|password|hashes)=|$)", RegexOption.IGNORE_CASE)
+    val pattern = Regex("(?:^|[&;]|(?<=[a-zA-Z0-9_]))(v|host|peer|password|client|hashes|token|workers)=([^&?]*?)(?=(?:v|host|peer|password|client|hashes|token|workers)=|$)", RegexOption.IGNORE_CASE)
     val matches = pattern.findAll(sanitized).toList()
     if (matches.isNotEmpty()) {
         val extracted = linkedMapOf<String, String>()
         for (match in matches) {
             val key = decodeQueryComponent(match.groupValues[1].lowercase()) ?: continue
             val value = match.groupValues[2]
+            if (extracted.containsKey(key)) return null
             extracted[key] = value
         }
-        if (extracted.isNotEmpty() && extracted.containsKey("v") && extracted.containsKey("host") && extracted.containsKey("peer") && extracted.containsKey("password")) {
+        if (extracted.isNotEmpty() && extracted.containsKey("v") && extracted.containsKey("host") && extracted.containsKey("peer")) {
             return extracted
         }
     }
@@ -88,6 +173,11 @@ private fun parseLinkHashes(rawHashes: String): List<String> {
     }
     if (hashes.any { it.length < 16 || it.any(Char::isWhitespace) }) return emptyList()
     return hashes.distinct().takeIf { it.size == hashes.size }.orEmpty()
+}
+
+private fun parseLinkVkAccessToken(rawToken: String): String? {
+    val token = decodeQueryComponent(rawToken)?.trim().orEmpty()
+    return token.takeIf { it.isNotEmpty() && it.length <= 4096 && it.none(Char::isWhitespace) }
 }
 
 private fun decodeQueryComponent(value: String): String? {
@@ -124,4 +214,31 @@ fun stripVkUrlStatic(input: String): String {
     val hIdx = s.indexOf('#')
     if (hIdx != -1) s = s.substring(0, hIdx)
     return s.trimEnd('/')
+}
+
+fun generate16CharPassword(): String {
+    val chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    val random = java.security.SecureRandom()
+    val sb = StringBuilder(16)
+    for (i in 0 until 16) {
+        sb.append(chars[random.nextInt(chars.length)])
+    }
+    return sb.toString()
+}
+
+fun formatCsqttLink(
+    host: String,
+    peer: Int,
+    password: String,
+    hashes: List<String> = emptyList(),
+    token: String = "",
+): String {
+    val queryParts = mutableListOf("v=2", "host=$host", "peer=$peer", "password=$password")
+    if (hashes.isNotEmpty()) {
+        queryParts.add("hashes=" + hashes.joinToString("+"))
+    } else if (token.isNotEmpty()) {
+        queryParts.add("token=$token")
+    }
+    val plain = "connect?" + queryParts.joinToString("&")
+    return "csqtt://" + encryptCsqttPayload(plain)
 }

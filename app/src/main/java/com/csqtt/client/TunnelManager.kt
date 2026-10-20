@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import android.annotation.SuppressLint
@@ -62,9 +59,9 @@ internal fun dnsProfileName(dns: String): String = when (dns.trim()) {
     "1.1.1.1,1.0.0.1" -> "Cloudflare DNS"
     "8.8.8.8,8.8.4.4" -> "Google DNS"
     "94.140.14.14,94.140.15.14" -> "AdGuard DNS"
-    "111.88.96.50,111.88.96.51" -> "Xbox DNS"
+    "111.88.96.54,111.88.96.55", "111.88.96.50,111.88.96.51" -> "Xbox DNS"
     "83.220.169.155,212.109.195.93" -> "Comms DNS"
-    "95.182.120.241,37.230.192.51" -> "Geohide DNS"
+    "193.233.112.67,193.233.112.88", "95.182.120.241,37.230.192.51" -> "Geohide DNS"
     "9.9.9.9,149.112.112.112" -> "Quad9 DNS"
     "208.67.222.222,208.67.220.220" -> "OpenDNS"
     "95.189.32.74,195.208.5.1" -> "Rostelecom DNS"
@@ -79,7 +76,7 @@ internal fun withoutLogStickers(message: String): String = message
         symbol.value.takeIf { it == "✓" || it == "✗" }.orEmpty()
     }
     .replace(EMPTY_LOG_TAG, "")
-    .replace(Regex("\\s+"), " ")
+    .replace(Regex("[^\\S\r\n]+"), " ")
     .trim()
 
 object TunnelManager {
@@ -96,25 +93,27 @@ object TunnelManager {
     private var processIdentity: ProcessIdentity? = null
     @Volatile
     private var nativeProcessPid: Int? = null
+    @Volatile
     private var readerJob: Job? = null
+    @Volatile
     private var restartJob: Job? = null
+    @Volatile
     private var panelRestartJob: Job? = null
+    @Volatile
     private var workerRecoveryJob: Job? = null
     private val transportRestartPending = AtomicBoolean(false)
     private val panelRestartPending = AtomicBoolean(false)
     private val callRecoveryPending = AtomicBoolean(false)
     private val workerRecoveryPolicy = WorkerRecoveryPolicy()
+    @Volatile
     private var crashRestartStreak = 0
     private const val WORKER_ZERO_CONFIRMATION_MS = 4_000L
     private const val PANEL_SERVER_RESTART_DELAY_MS = 4_000L
     private const val STARTUP_DIAGNOSTIC_MS = 30_000L
-    // A process that lived shorter than this counts toward the crash-loop
-    // backoff; a longer-lived run resets it.
     private const val CRASH_RESTART_STABLE_MS = 30_000L
     private const val CRASH_RESTART_MAX_DELAY_MS = 60_000L
-    // Stats-path VPN start retry window: the START intent fires once from the
-    // Config event, then at most once per this interval until vpnReady.
     private const val VPN_START_RETRY_MS = 10_000L
+    private const val TUN_LOSS_REBUILD_WINDOW_MS = 60_000L
 
     private val startStopMutex = kotlinx.coroutines.sync.Mutex()
     private val lifecycleState = TunnelLifecycleState()
@@ -129,6 +128,7 @@ object TunnelManager {
     ) {
         val inputLock = Any()
         val readyWorkers = mutableSetOf<Int>()
+        val dtlsWorkers = mutableSetOf<Int>()
         val unavailableManualHashes = mutableSetOf<String>()
     }
 
@@ -145,7 +145,7 @@ object TunnelManager {
     private const val LOG_UI_FLUSH_MS = 120L
     private const val MAX_LOG_ENTRIES = 100
     private const val MAX_PENDING_LOGS = 128
-    private const val MAX_LOG_MESSAGE_LENGTH = 1_024
+    private const val MAX_LOG_MESSAGE_LENGTH = 4_096
     private val pendingLogLock = Any()
     private val pendingLogs = LinkedHashMap<String, PendingLog>()
     private val pendingLogFlushScheduled = AtomicBoolean(false)
@@ -153,6 +153,8 @@ object TunnelManager {
     @Volatile
     private var wrapAuthTimeoutCount = 0
     private var lastVpnStartAttemptMs = 0L
+    @Volatile
+    private var lastTunLossMs = 0L
     @Volatile
     var processStartedAtMs = 0L
     @Volatile
@@ -166,6 +168,8 @@ object TunnelManager {
     private var activeSettingsStore: SettingsStore? = null
     @Volatile
     private var currentCaptchaSolveMethod = "auto" 
+    @Volatile
+    private var lastAppliedDns: String? = null
 
     @Volatile
     var isLoggingEnabled = true
@@ -184,6 +188,10 @@ object TunnelManager {
     val activeWorkers = MutableStateFlow(0)
     val autoPausedForWifi = MutableStateFlow(false)
     val vpnReady = MutableStateFlow(false)
+    val serverRoutingActive = MutableStateFlow(false)
+    val activeServerRoutingRule = MutableStateFlow<ServerRoutingRule?>(null)
+    val serverAssignedWorkers = MutableStateFlow<Int?>(null)
+    val lastTunnelDiagnostic = MutableStateFlow("")
     val uptimeSeconds = MutableStateFlow<Long?>(null)
     private var uptimeJob: Job? = null
     
@@ -223,15 +231,6 @@ object TunnelManager {
     }
 
     fun getCurrentParams(): TunnelParams? = currentParams
-
-    fun currentNativeProcessId(): Int? {
-        nativeProcessPid
-            ?.takeIf { it > 0 && File("/proc/$it").exists() }
-            ?.let { return it }
-        val activeProcess = process ?: return null
-        if (!activeProcess.isAlive) return null
-        return processIdOf(activeProcess)
-    }
 
     private fun processIdOf(activeProcess: Process): Int? {
         return runCatching {
@@ -283,7 +282,10 @@ object TunnelManager {
 
     fun onVpnInterfaceReady(dns: String? = null) {
         vpnReady.value = true
-        if (!dns.isNullOrBlank()) {
+        lastTunnelDiagnostic.value = ""
+        activeScope.launch { activeSettingsStore?.clearTunnelDiagnostic() }
+        if (!dns.isNullOrBlank() && dns != lastAppliedDns) {
+            lastAppliedDns = dns
             updateLog(
                 key = "vpn_dns_active_${dnsProfileName(dns)}",
                 message = "[SERVER] DNS применён: ${dnsProfileName(dns)} ✓",
@@ -293,16 +295,63 @@ object TunnelManager {
         }
     }
 
+    fun onRoutingUpdated() {
+        vpnReady.value = true
+        lastTunnelDiagnostic.value = ""
+        activeScope.launch { activeSettingsStore?.clearTunnelDiagnostic() }
+        updateLog(
+            key = "vpn_routing_updated",
+            message = "[СЕТЬ] Маршрутизация приложений обновлена ✓",
+            priority = 25,
+            level = LogLevel.NET,
+        )
+    }
+
     fun onVpnInterfaceStopped() {
         vpnReady.value = false
     }
 
-    fun onVpnTerminalFailure(message: String) {
+    private fun recordTunnelDiagnostic(code: String, message: String) {
+        val diagnostic = "$code: ${message.trim()}".take(480)
+        lastTunnelDiagnostic.value = diagnostic
+        val context = activeContext() ?: return
+        scope.launch {
+            val store = activeSettingsStore ?: SettingsStore(context).also {
+                activeSettingsStore = it
+            }
+            store.saveTunnelDiagnostic(code, message)
+        }
+    }
+
+    internal fun onVpnRecoverableFailure(message: String, kind: VpnFailureKind) {
+        if (!VpnRecoveryPolicy.keepsTunnelRequested(kind)) {
+            onVpnTerminalFailure(message, kind)
+            return
+        }
         vpnReady.value = false
-        updateLog("tun_vpn_error", "✗ VPN TUN: $message", 99, true)
-        activeScope.launch {
+        val diagnostic = VpnRecoveryPolicy.message(kind, message)
+        recordTunnelDiagnostic(kind.code, diagnostic)
+        updateLog("${kind.code}_recover", "[VPN] $diagnostic · восстановление", 98, true)
+        val context = activeContext() ?: return
+        if (!running.value || !lifecycleState.isDesiredRunning()) return
+        requestTransportRestart(
+            context.applicationContext,
+            kind.code,
+            "[VPN] Восстановление интерфейса и транспорта",
+        )
+    }
+
+    internal fun onVpnTerminalFailure(
+        message: String,
+        kind: VpnFailureKind = VpnFailureKind.TunEstablishFailed,
+    ) {
+        vpnReady.value = false
+        val diagnostic = VpnRecoveryPolicy.message(kind, message)
+        recordTunnelDiagnostic(kind.code, diagnostic)
+        updateLog("${kind.code}_terminal", "✗ VPN TUN: $diagnostic", 99, true)
+        scope.launch {
             startStopMutex.withLock {
-                if (lifecycleState.isDesiredRunning()) stopLocked(processIdentity)
+                stopLocked(processIdentity)
             }
         }
     }
@@ -347,7 +396,7 @@ object TunnelManager {
                     if (!vpnReady.value && currentConfig != null && currentConfig.startsWith("TUNCONF:") &&
                         SystemClock.elapsedRealtime() - lastVpnStartAttemptMs >= VPN_START_RETRY_MS
                     ) {
-                        ensureVpnStarted(currentConfig, identity)
+                        ensureVpnStarted(currentConfig, identity, reason = "stats_no_vpn")
                     }
                 }
                 val totalMB = (event.bytesUp + event.bytesDown) / (1024.0 * 1024.0)
@@ -368,6 +417,26 @@ object TunnelManager {
                     updateProcessLog(identity, "ready", "[ВОРКЕР] Поток готов ✓", 20, false, LogLevel.OK)
                 }
             }
+            is TunnelEventParser.Event.Dtls -> {
+                if (isCurrent(identity)) {
+                    val suffix = event.message.trim()
+                    val isError = suffix.contains("не состоялось") || suffix.contains("ошибка", ignoreCase = true)
+                    val level = if (isError) LogLevel.ERR else LogLevel.OK
+                    if (isError) {
+                        val message = "[DTLS] Поток ${event.worker}: $suffix"
+                        updateProcessLog(identity, "dtls_err_${event.worker}", message, 30, true, level)
+                    } else {
+                        val message = if (suffix.contains("завершено")) {
+                            "[DTLS] Рукопожатие завершено, ключи SRTP установлены ✓"
+                        } else if (suffix.isNotEmpty()) {
+                            "[DTLS] $suffix"
+                        } else {
+                            "[DTLS] Рукопожатие выполняется"
+                        }
+                        updateProcessLog(identity, "dtls_status", message, 30, false, LogLevel.OK)
+                    }
+                }
+            }
             is TunnelEventParser.Event.Config -> {
                 val configStr = event.config.trim()
                 if (configStr.isNotEmpty()) {
@@ -375,12 +444,33 @@ object TunnelManager {
                     activeScope.launch(Dispatchers.Main) {
                         if (!isCurrent(identity)) return@launch
                         if (configStr.startsWith("TUNCONF:")) {
-                            ensureVpnStarted(configStr, identity)
+                            ensureVpnStarted(configStr, identity, reason = "tunconf")
                         } else {
                             updateProcessLog(identity, "vpn_config_err", "Получен неизвестный формат конфига", 99, true)
                         }
                     }
                 }
+            }
+            is TunnelEventParser.Event.Routing -> {
+                val routingJsonStr = event.routing.trim()
+                if (routingJsonStr.isNotEmpty()) {
+                    activeScope.launch(Dispatchers.Main) {
+                        if (!isCurrent(identity)) return@launch
+                        val rule = parseServerRoutingRuleJson(routingJsonStr)
+                        val activeConf = config.value
+                        var clientIp = ""
+                        var dns = ""
+                        if (activeConf != null && activeConf.startsWith("TUNCONF:")) {
+                            val parts = activeConf.substring("TUNCONF:".length).split(":")
+                            clientIp = parts.getOrNull(0)?.trim().orEmpty()
+                            dns = parts.getOrNull(1)?.trim().orEmpty()
+                        }
+                        applyServerRoutingRule(rule, clientIp, dns)
+                    }
+                }
+            }
+            is TunnelEventParser.Event.Workers -> {
+                handleServerAssignedWorkers(event.workers, identity)
             }
             is TunnelEventParser.Event.Error -> {
                 if (event.fatal) {
@@ -401,9 +491,41 @@ object TunnelManager {
                     identity.startupProgress.credentialReceived()
                 }
             }
+            is TunnelEventParser.Event.TunLost -> {
+                if (isCurrent(identity)) {
+                    val now = SystemClock.elapsedRealtime()
+                    val escalate = now - lastTunLossMs < TUN_LOSS_REBUILD_WINDOW_MS
+                    lastTunLossMs = now
+                    updateProcessLog(
+                        identity,
+                        if (escalate) "tun_lost_rebuild" else "tun_lost_reuse",
+                        if (escalate) {
+                            "[TUN] Запрос переподключения FD (пересборка интерфейса)"
+                        } else {
+                            "[TUN] Повторная выдача действующего TUN FD без пересборки"
+                        },
+                        20,
+                        false,
+                        LogLevel.OK,
+                    )
+                    config.value?.let { conf ->
+                        ensureVpnStarted(
+                            conf,
+                            identity,
+                            forceRebuild = escalate,
+                            reason = if (escalate) "tun_lost_rebuild" else "tun_lost_reuse",
+                        )
+                    }
+                }
+            }
             else -> return false
         }
         return true
+    }
+
+    private fun handleServerAssignedWorkers(assignedWorkers: Int, identity: ProcessIdentity) {
+        if (!isCurrent(identity)) return
+        serverAssignedWorkers.value = if (assignedWorkers in TunnelEventParser.MIN_SERVER_WORKERS..CsqttConstants.Tunnel.MAX_WORKERS) assignedWorkers else null
     }
 
     private fun verifyVkReachability(identity: ProcessIdentity) {
@@ -442,7 +564,7 @@ object TunnelManager {
     ) {
         val params = currentParams ?: return
         val displayHash = displayVkHash(event.hash)
-        val reason = if (event.code == 951) "звонок не найден" else "код ${event.code}"
+        val reason = if (event.code == TunnelEventParser.CALL_NOT_FOUND_CODE) "звонок не найден" else "код ${event.code}"
         if (shouldReplaceUnavailableVkHash(params.vkHashMode)) {
             updateLog(
                 key = "vk_hash_auto_replace_$displayHash",
@@ -466,9 +588,6 @@ object TunnelManager {
             level = LogLevel.OK,
         )
         activeScope.launch {
-            val store = activeSettingsStore ?: activeContext()?.let { SettingsStore(it) } ?: return@launch
-            activeSettingsStore = store
-            store.invalidateVkHash(event.hash)
             val remaining = params.vkHashes
                 .split(Regex("[,\\s\\n]+"))
                 .map(String::trim)
@@ -493,34 +612,63 @@ object TunnelManager {
         configStr: String,
         identity: ProcessIdentity,
         forceRebuild: Boolean = false,
+        reason: String = "ensure",
     ) {
-        ensureVpnStartedMeasured(configStr, identity, forceRebuild)
+        ensureVpnStartedMeasured(configStr, identity, forceRebuild, reason)
     }
 
     private fun ensureVpnStartedMeasured(
         configStr: String,
         identity: ProcessIdentity,
         forceRebuild: Boolean,
+        reason: String,
     ) {
         if (!configStr.startsWith("TUNCONF:")) return
-        val parts = configStr.removePrefix("TUNCONF:").split(":", limit = 3)
-        val clientIp = parts.getOrNull(0) ?: "10.66.66.2"
-        val dns = parts.getOrNull(1) ?: "1.1.1.1"
+        val parts = configStr.removePrefix("TUNCONF:").split(":", limit = 5)
+        val clientIp = parts.getOrNull(0)?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        val dns = parts.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() } ?: return
+
+        val b64Routing = parts.getOrNull(4)?.trim()?.takeIf { it.isNotEmpty() && !it.startsWith("pad=") && !it.startsWith("workers=") }
+        var newServerRule: ServerRoutingRule? = null
+        if (b64Routing != null) {
+            val routingJsonStr = try {
+                val decoded = android.util.Base64.decode(b64Routing, android.util.Base64.DEFAULT)
+                if (decoded.size >= 2 && decoded[0] == 0x1f.toByte() && decoded[1] == 0x8b.toByte()) {
+                    java.util.zip.GZIPInputStream(decoded.inputStream()).bufferedReader(Charsets.UTF_8).use { it.readText() }
+                } else {
+                    String(decoded, Charsets.UTF_8)
+                }
+            } catch (_: Exception) {
+                null
+            }
+            if (routingJsonStr != null) {
+                newServerRule = parseServerRoutingRuleJson(routingJsonStr)
+            }
+        }
+        if (newServerRule != null || activeServerRoutingRule.value != null) {
+            applyServerRoutingRule(newServerRule, clientIp, dns)
+        }
+
         activeContext()?.let { ctx ->
-            // Single choke point: both start paths share this attempt window.
             lastVpnStartAttemptMs = SystemClock.elapsedRealtime()
             val vpnIntent = Intent(ctx, TunVpnService::class.java).apply {
                 action = "START"
                 putExtra("client_ip", clientIp)
                 putExtra("dns", dns)
                 putExtra("force_rebuild", forceRebuild)
+                putExtra("reason", reason)
+                putExtra("mtu", CsqttConstants.Vpn.DEFAULT_MTU)
             }
             try {
-                ctx.startService(vpnIntent)
+                startTunVpnService(ctx, vpnIntent)
             } catch (e: Exception) {
                 updateProcessLog(identity, "vpn_start_error", "Ошибка запуска VPN: ${e.readableMessage()}", 99, true)
             }
         }
+    }
+
+    private fun startTunVpnService(context: Context, intent: Intent) {
+        context.startService(intent)
     }
 
     private fun scheduleWorkerZeroRecovery(identity: ProcessIdentity) {
@@ -599,6 +747,7 @@ object TunnelManager {
                 val newParams = runCatching { params.withNewSession(appContext) }
                     .getOrElse {
                         if (logKey == "network_swap") pausedForNoNetwork.restore()
+                        if (it is kotlin.coroutines.cancellation.CancellationException) throw it
                         updateLog(
                             "${logKey}_epoch_error",
                             "Ошибка обновления эпохи: ${it.readableMessage()}",
@@ -618,6 +767,7 @@ object TunnelManager {
                     val epoch = lifecycleState.requestRestart() ?: return@withLock
                     restartJob?.cancel()
                     restartJob = null
+                    vpnReady.value = false
                     updateLog(logKey, message, 2, false)
                     terminateProcessLocked(processIdentity)
                     currentParams = newParams
@@ -842,7 +992,10 @@ object TunnelManager {
         activeScope.launch {
             startStopMutex.withLock {
                 if (lifecycleCommand.get() != command) return@withLock
-                if (!isSwitching && lifecycleState.isDesiredRunning()) return@withLock
+                if (!isSwitching && lifecycleState.isDesiredRunning()) {
+                    starting.value = false
+                    return@withLock
+                }
                 val appContext = context.applicationContext
                 val epoch = if (isSwitching) {
                     lifecycleState.requestRestart() ?: return@withLock
@@ -857,6 +1010,8 @@ object TunnelManager {
                     strongAppContext = appContext.applicationContext
                     lastContext = WeakReference(appContext)
                     activeSettingsStore = SettingsStore(appContext)
+                    lastTunnelDiagnostic.value = ""
+                    activeScope.launch { activeSettingsStore?.clearTunnelDiagnostic() }
                     currentCaptchaSolveMethod = params.captchaSolveMethod
                     lifecycleState.requestStart()
                 }
@@ -875,11 +1030,24 @@ object TunnelManager {
         stopUptimeTimer()
         running.value = false
         stopping.value = false
+        starting.value = false
         activeWorkers.value = 0
     }
 
     private fun startProcessLocked(context: Context, params: TunnelParams, epoch: Long) {
-        if (!lifecycleState.canStart(epoch) || process != null) return
+        if (!lifecycleState.canStart(epoch)) {
+            starting.value = false
+            return
+        }
+        val existingProcess = process
+        if (existingProcess != null) {
+            if (existingProcess.isAlive) {
+                terminateExactProcess(existingProcess, 1_000L, false)
+            }
+            process = null
+            processIdentity = null
+            nativeProcessPid = null
+        }
         val hashList = params.vkHashes
             .split(Regex("[,\\s\\n]+"))
             .map { it.trim() }
@@ -888,9 +1056,10 @@ object TunnelManager {
 
         val jsHashMode = params.vkHashMode == CsqttConstants.VkAutoHash.MODE_AUTO_JS
         val jsAuthMode = params.vkAuthMode == CsqttConstants.VkAuth.MODE_AUTO_JS
-        if (jsAuthMode && !jsHashMode) {
-            failStartLocked("vk_js_mode_error", "Ошибка: режим работы Auto JS требует хеши Auto JS")
-            return
+        val effectiveAuthMode = if (jsAuthMode && !jsHashMode) {
+            CsqttConstants.VkAuth.MODE_CALLS
+        } else {
+            params.vkAuthMode
         }
         if (hashList.isEmpty() && !jsHashMode) {
             failStartLocked("hash_error", "Ошибка: Хеш не указан")
@@ -898,10 +1067,6 @@ object TunnelManager {
         }
         if (jsHashMode && params.vkAccessToken.isBlank()) {
             failStartLocked("vk_token_error", "Ошибка: VK access token не указан")
-            return
-        }
-        if (params.connectionPassword.isBlank()) {
-            failStartLocked("password_error", "Ошибка: пароль подключения не указан")
             return
         }
 
@@ -929,9 +1094,6 @@ object TunnelManager {
         }
         cmd.add("-vk-hash-mode")
         cmd.add(params.vkHashMode)
-        if (params.allowHashRedistribution || jsHashMode) {
-            cmd.add("--allow-hash-redistribution")
-        }
         if (params.fingerprint.isNotEmpty()) {
             cmd.add("-fingerprint")
             cmd.add(params.fingerprint)
@@ -944,12 +1106,14 @@ object TunnelManager {
         cmd.add(params.obfsMode)
         cmd.add("-turn-transport")
         cmd.add(params.turnTransport)
+        cmd.add("-srtp-mode")
+        cmd.add(params.srtpMode)
+        if (params.customTurnIps.isNotBlank()) {
+            cmd.add("-custom-turn-ips")
+            cmd.add(params.customTurnIps)
+        }
         cmd.add("-vk-auth-mode")
-        cmd.add(params.vkAuthMode)
-        cmd.add("-device-id")
-        cmd.add(readDeviceId(context))
-        cmd.add("-password")
-        cmd.add(params.connectionPassword)
+        cmd.add(effectiveAuthMode)
         if (params.generationId > 0) {
             cmd.add("-gen")
             cmd.add(params.generationId.toString())
@@ -960,6 +1124,52 @@ object TunnelManager {
         }
         cmd.add("-captcha-mode")
         cmd.add(params.captchaMode)
+        val isDomainRoutingActive = params.domainRoutingEnabled || params.excludeRuZones || params.templateDomains || params.directDomains.isNotBlank()
+        if (isDomainRoutingActive) {
+            cmd.add("--domain-routing")
+            if (params.domainIsWhitelist) {
+                cmd.add("--domain-whitelist")
+            }
+            if (params.excludeRuZones && !params.domainIsWhitelist) {
+                cmd.add("--exclude-ru-zones")
+            }
+            if (params.templateDomains && !params.domainIsWhitelist) {
+                cmd.add("--template-domains")
+                val templateFile = java.io.File(context.filesDir, "domains.txt")
+                if (!templateFile.exists() || templateFile.length() == 0L) {
+                    runCatching {
+                        context.assets.open("domains.txt").use { input ->
+                            templateFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+                }
+                if (templateFile.exists() && templateFile.length() > 0L) {
+                    cmd.add("--domains-file")
+                    cmd.add(templateFile.absolutePath)
+                }
+            }
+            if (params.directDomains.isNotBlank()) {
+                val userFile = java.io.File(context.filesDir, "user.txt")
+                runCatching {
+                    val content = params.directDomains.split(',').filter { it.isNotBlank() }.joinToString("\n")
+                    userFile.writeText(content)
+                }
+                if (userFile.exists() && userFile.length() > 0L) {
+                    cmd.add("--domains-file")
+                    cmd.add(userFile.absolutePath)
+                }
+            }
+        }
+        if (params.ipRoutingEnabled || params.directIps.isNotBlank()) {
+            cmd.add("--ip-routing")
+            if (params.ipIsWhitelist) {
+                cmd.add("--ip-whitelist")
+            }
+            if (params.directIps.isNotBlank()) {
+                cmd.add("--direct-ips")
+                cmd.add(params.directIps)
+            }
+        }
 
         val pb = ProcessBuilder(cmd)
         pb.directory(context.filesDir)
@@ -967,8 +1177,15 @@ object TunnelManager {
         pb.environment()["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir
         pb.environment()[CsqttConstants.Tunnel.PROCESS_ENV_EVENTS] = "1"
         pb.environment()["RAYON_NUM_THREADS"] = "2"
+        if (params.connectionPassword.isNotEmpty()) {
+            pb.environment()["CSQTT_PASSWORD"] = params.connectionPassword
+        }
 
-        val ticket = lifecycleState.reserveProcess(epoch, process == null) ?: return
+        val ticket = lifecycleState.reserveProcess(epoch, process == null)
+        if (ticket == null) {
+            starting.value = false
+            return
+        }
         val startedProcess = try {
             pb.start()
         } catch (e: Exception) {
@@ -1017,6 +1234,15 @@ object TunnelManager {
         resetWorkerRecoveryState()
         startLogReader(identity)
         scheduleStartupDiagnostic(identity)
+        config.value
+            ?.trim()
+            ?.takeIf { it.startsWith("TUNCONF:") }
+            ?.let { retainedConfig ->
+                activeScope.launch {
+                    delay(250L)
+                    if (isCurrent(identity)) ensureVpnStarted(retainedConfig, identity, reason = "startup")
+                }
+            }
     }
 
     private fun scheduleStartupDiagnostic(identity: ProcessIdentity) {
@@ -1043,48 +1269,64 @@ object TunnelManager {
         }
     }
 
-    @SuppressLint("HardwareIds")
-    internal fun readDeviceId(context: Context): String =
-        android.provider.Settings.Secure.getString(
-            context.contentResolver,
-            android.provider.Settings.Secure.ANDROID_ID
-        ) ?: "unknown"
-
     private fun startLogReader(identity: ProcessIdentity) {
         val targetProcess = identity.process
-        val generation = identity.generation
         readerJob = activeScope.launch {
             val reader = targetProcess.inputStream.bufferedReader()
-            var collectingConfig = false
-            val configBuilder = StringBuilder()
             var lastDiagnostic: String? = null
 
             try {
                 reader.forEachLine { line ->
                     if (!isCurrent(identity)) return@forEachLine
 
-                    // The timestamp prefix always starts with "YYYY/", so two
-                    // character checks skip the regex for non-timestamped lines.
                     val stripped =
                         if (line.length > 19 && line[0].isDigit() && line[4] == '/') {
                             line.replace(LOG_TIMESTAMP_PREFIX, "")
                         } else {
                             line
                         }
-                    val lineTrim = stripped.trim()
-
-                    // Structured events are the common case under traffic:
-                    // one startsWith check routes them out before all the
-                    // substring scans below.
-                    val event = TunnelEventParser.parse(lineTrim)
-                    if (event != null && handleTunnelEvent(event, identity)) {
-                        return@forEachLine
+                    var lineTrim = stripped.trim()
+                    val eventPrefix = CsqttConstants.General.CSQTT_EVENT_PREFIX
+                    val eventIdx = lineTrim.indexOf(eventPrefix)
+                    if (eventIdx >= 0) {
+                        val eventPart = lineTrim.substring(eventIdx)
+                        lineTrim = lineTrim.substring(0, eventIdx).trim()
+                        val event = TunnelEventParser.parse(eventPart)
+                        if (event != null) {
+                            handleTunnelEvent(event, identity)
+                        }
+                        if (lineTrim.isEmpty()) {
+                            return@forEachLine
+                        }
+                    } else {
+                        val event = TunnelEventParser.parse(lineTrim)
+                        if (event != null && handleTunnelEvent(event, identity)) {
+                            return@forEachLine
+                        }
                     }
 
-                    if (!isLoggingEnabled &&
-                        !lineTrim.startsWith("CAPTCHA_SOLVE|") &&
-                        !lineTrim.contains("FATAL_")
-                    ) {
+                    val isCritical = lineTrim.startsWith("CAPTCHA_SOLVE|") ||
+                        lineTrim.contains("FATAL_") ||
+                        lineTrim.contains("[ФАТАЛ]", true) ||
+                        lineTrim.contains("[PANIC]", true) ||
+                        lineTrim.contains("AUTH_RETRY") ||
+                        lineTrim.contains("WRAP_AUTH_TIMEOUT", true) ||
+                        lineTrim.contains("[WRAP]") ||
+                        lineTrim.startsWith("[ВОРКЕР") ||
+                        lineTrim.startsWith("[КРЕД") ||
+                        lineTrim.startsWith("[СЕТЬ]") ||
+                        lineTrim.startsWith("[ПОТОКИ]") ||
+                        lineTrim.startsWith("[VK JS]") ||
+                        lineTrim.contains("DENIED:", true) ||
+                        lineTrim.contains("Ошибка", true) ||
+                        lineTrim.contains("error", true) ||
+                        lineTrim.contains("FAIL", true)
+
+                    if (lineTrim.contains("[КЛИЕНТ] Все воркеры завершены", true) || isCritical) {
+                        lastDiagnostic = lineTrim.take(240)
+                    }
+
+                    if (!isLoggingEnabled && !isCritical) {
                         return@forEachLine
                     }
 
@@ -1092,19 +1334,7 @@ object TunnelManager {
                         return@forEachLine
                     }
 
-                    if (
-                        lineTrim.contains("[ФАТАЛ]", true) ||
-                        lineTrim.contains("[PANIC]", true) ||
-                        lineTrim.contains("fatal", true) ||
-                        lineTrim.contains("cannot create socket", true) ||
-                        lineTrim.contains("невосстановимая", true)
-                    ) {
-                        lastDiagnostic = lineTrim.take(240)
-                    }
-
                     if (lineTrim.contains("WRAP_AUTH_TIMEOUT", true)) {
-                        // WRAP handshake timeouts are recoverable; they must not
-                        // fall through to the fatal-auth stop below.
                         if (activeWorkers.value > 0) {
                             wrapAuthTimeoutCount = 0
                             updateProcessLog(
@@ -1127,11 +1357,11 @@ object TunnelManager {
                         return@forEachLine
                     }
 
-                    if (lineTrim.contains("FATAL_AUTH")) {
+                    if (lineTrim.contains("FATAL_AUTH") || lineTrim.contains("AUTH_RETRY")) {
                         val reason = when {
                             lineTrim.contains("неверный пароль") -> "Неверный пароль подключения"
                             lineTrim.contains("истёк") -> "Срок действия пароля истёк"
-                            lineTrim.contains("другому устройству") -> "Пароль привязан к другому устройству"
+                            lineTrim.contains("деактивирован") -> "Аккаунт деактивирован"
                             else -> "Ошибка авторизации"
                         }
                         handleCriticalError("\uD83D\uDD12 $reason. Воркеры остановлены.", identity)
@@ -1141,14 +1371,6 @@ object TunnelManager {
                     if (lineTrim.contains("FATAL_PROTOCOL")) {
                         handleCriticalError(
                             "🔁 Клиент и сервер используют разные версии протокола. Выполните деплой из этой версии приложения. Воркеры остановлены.",
-                            identity,
-                        )
-                        return@forEachLine
-                    }
-
-                    if (lineTrim.contains("FATAL_HANDSHAKE")) {
-                        handleCriticalError(
-                            "🔐 Сервер не подтвердил подключение. Проверьте пароль туннеля и совместимость клиента с сервером. Воркеры остановлены.",
                             identity,
                         )
                         return@forEachLine
@@ -1184,8 +1406,6 @@ object TunnelManager {
                         return@forEachLine
                     }
 
-                    // Computed this late so early-returning lines (events,
-                    // recovery noise, WRAP/CAPTCHA) skip the six scans.
                     val isError = lineTrim.contains("Ошибка", true) || lineTrim.contains("error", true) || lineTrim.contains("FAIL", true) || lineTrim.contains("timeout", true) || lineTrim.contains("refused", true) || lineTrim.contains("FATAL_", true)
 
                     when {
@@ -1286,6 +1506,9 @@ object TunnelManager {
                         }
                         lineTrim.contains("[TURN]") -> {
                             val text = lineTrim.substringAfter("[TURN]").trim()
+                            if (text.contains("Используются TURN IP", true)) {
+                                return@forEachLine
+                            }
                             val turnError = TunnelLogPolicy.isTurnStreamFailure(lineTrim) || isError
                             val (stableKey, priority) = when {
                                 turnError -> "turn_error_${text.hashCode()}" to 99
@@ -1332,7 +1555,7 @@ object TunnelManager {
                 runCatching { reader.close() }
                 startStopMutex.withLock {
                     if (processIdentity === identity && process === targetProcess) {
-                        val shouldRestart = lifecycleState.processEnded(identity.ticket)
+                        val lifecycleWantsRestart = lifecycleState.processEnded(identity.ticket)
                         process = null
                         processIdentity = null
                         nativeProcessPid = null
@@ -1349,16 +1572,24 @@ object TunnelManager {
                         if (initialExitCode == null) {
                             terminateExactProcess(targetProcess, identity.shutdownGraceMs)
                         }
+                        val exitCode = initialExitCode
+                            ?: runCatching { targetProcess.exitValue() }.getOrNull()
+                        val shouldRestart = lifecycleWantsRestart
+                        if (lifecycleWantsRestart) {
+                            VkAutoCallsManager.finishActiveCalls()
+                        }
                         val restartContext = activeContext()
                         val restartParams = if (restartContext == null) {
                             null
                         } else {
-                            runCatching {
+                            try {
                                 currentParams?.withNewSession(restartContext)
-                            }.getOrElse {
+                            } catch (_: kotlin.coroutines.cancellation.CancellationException) {
+                                null
+                            } catch (e: Exception) {
                                 updateLog(
                                     "restart_epoch_reserve_error",
-                                    "Ошибка резервирования новой эпохи: ${it.readableMessage()}. Перезапуск с последней подтверждённой эпохой.",
+                                    "Ошибка резервирования новой эпохи: ${e.readableMessage()}. Перезапуск с последней подтверждённой эпохой.",
                                     99,
                                     true,
                                 )
@@ -1367,8 +1598,6 @@ object TunnelManager {
                         }
                         if (shouldRestart && restartParams != null && restartContext != null) {
                             currentParams = restartParams
-                            val exitCode = initialExitCode
-                                ?: runCatching { targetProcess.exitValue() }.getOrNull()
                             val reason = lastDiagnostic?.let { " Причина: $it" }.orEmpty()
                             updateLog(
                                 "process_restart",
@@ -1376,8 +1605,6 @@ object TunnelManager {
                                 50,
                                 true,
                             )
-                            // Exponential backoff: a binary that dies instantly
-                            // must not loop the whole start sequence every 2s.
                             val uptimeMs = processStartedAtMs
                                 .takeIf { it > 0 }
                                 ?.let { SystemClock.elapsedRealtime() - it }
@@ -1390,6 +1617,17 @@ object TunnelManager {
                             scheduleRestartLocked(restartContext, restartParams, identity.ticket.epoch, restartDelayMs)
                         } else if (!lifecycleState.isDesiredRunning()) {
                             running.value = false
+                        } else {
+                            running.value = false
+                            starting.value = false
+                            stopping.value = false
+                            updateLog(
+                                "process_exit",
+                                "✗ Rust-клиент завершился без перезапуска (код ${exitCode ?: "?"})." +
+                                    lastDiagnostic?.let { " Причина: $it" }.orEmpty(),
+                                99,
+                                true,
+                            )
                         }
                     }
                 }
@@ -1440,27 +1678,38 @@ object TunnelManager {
         identity: ProcessIdentity?,
         finishVkCalls: Boolean = false,
     ) {
-        if (identity == null) {
-            activeWorkers.value = 0
-            return
-        }
-        val targetProcess = identity.process
-        val attached = processIdentity === identity && process === targetProcess
-        val logReader = if (attached) readerJob else null
-        if (attached) {
+        val targetProcess = identity?.process ?: process
+        if (targetProcess == null) {
             process = null
             processIdentity = null
             nativeProcessPid = null
+            activeWorkers.value = 0
+            return
+        }
+        val attached = (identity == null || processIdentity === identity) && process === targetProcess
+        val logReader = if (attached || process === targetProcess) readerJob else null
+        val pidToKill = nativeProcessPid ?: processIdOf(targetProcess)
+        if (attached || process === targetProcess) {
+            process = null
+            processIdentity = null
+            nativeProcessPid = null
+            vpnReady.value = false
             stopUptimeTimer()
             resetWorkerRecoveryState()
         }
-        lifecycleState.releaseReservation(identity.ticket)
-        terminateExactProcess(targetProcess, identity.shutdownGraceMs, finishVkCalls)
+        identity?.let { lifecycleState.releaseReservation(it.ticket) }
         logReader?.cancel()
         if (readerJob === logReader) {
             readerJob = null
         }
-        if (attached) activeWorkers.value = 0
+        val graceMs = identity?.shutdownGraceMs ?: 3_500L
+        terminateExactProcess(targetProcess, graceMs, finishVkCalls)
+        pidToKill?.let { pid ->
+            if (pid > 0 && targetProcess.isAlive) {
+                runCatching { android.os.Process.killProcess(pid) }
+            }
+        }
+        activeWorkers.value = 0
     }
 
     private fun terminateExactProcess(
@@ -1484,6 +1733,14 @@ object TunnelManager {
         }
         if (targetProcess.isAlive) {
             try { targetProcess.destroyForcibly() } catch (_: Exception) {}
+            try { targetProcess.waitFor(200L, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
+        }
+        if (targetProcess.isAlive) {
+            processIdOf(targetProcess)?.let { pid ->
+                if (pid > 0) {
+                    runCatching { android.os.Process.killProcess(pid) }
+                }
+            }
         }
     }
 
@@ -1529,6 +1786,9 @@ object TunnelManager {
         if (!preserveWifiAutoPause) autoPausedForWifi.value = false
         pausedForNoNetwork.reset()
         vpnReady.value = false
+        serverRoutingActive.value = false
+        activeServerRoutingRule.value = null
+        serverAssignedWorkers.value = null
         restartJob?.cancel()
         restartJob = null
         panelRestartJob?.cancel()
@@ -1538,6 +1798,8 @@ object TunnelManager {
         activeContext()?.let { ctx ->
             val stopIntent = Intent(ctx, TunVpnService::class.java).apply { action = "STOP" }
             try { ctx.startService(stopIntent) } catch (_: Exception) {}
+            val stopTunnelIntent = Intent(ctx, TunnelService::class.java).apply { action = "STOP" }
+            try { ctx.startService(stopTunnelIntent) } catch (_: Exception) {}
         }
         terminateProcessLocked(identity, finishVkCalls)
         running.value = false
@@ -1546,6 +1808,7 @@ object TunnelManager {
         nativeProcessPid = null
         currentParams = null
         activeSettingsStore = null
+        lastAppliedDns = null
         ManlCaptchaWebViewManager.cancelCaptcha()
     }
 
@@ -1554,16 +1817,18 @@ object TunnelManager {
         if (running.value && configStr.startsWith("TUNCONF:")) {
             activeScope.launch(Dispatchers.Main) {
                 val parts = configStr.removePrefix("TUNCONF:").split(":", limit = 3)
-                val clientIp = parts.getOrNull(0) ?: "10.66.66.2"
-                val dns = parts.getOrNull(1) ?: "1.1.1.1"
+                val clientIp = parts.getOrNull(0)?.trim()?.takeIf { it.isNotEmpty() } ?: return@launch
+                val dns = parts.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() } ?: return@launch
                 activeContext()?.let { ctx ->
                     val vpnIntent = Intent(ctx, TunVpnService::class.java).apply {
-                        action = "START"
+                        action = "RELOAD_ROUTING"
                         putExtra("client_ip", clientIp)
                         putExtra("dns", dns)
                         putExtra("force_rebuild", true)
+                        putExtra("is_routing_reload", true)
+                        putExtra("reason", "reload_vpn")
                     }
-                    try { ctx.startService(vpnIntent) } catch (_: Exception) {}
+                    try { startTunVpnService(ctx, vpnIntent) } catch (_: Exception) {}
                 }
             }
         }
@@ -1600,16 +1865,16 @@ object TunnelManager {
             }
             updateProcessLog(identity, "captcha_wv_step_4", "[КАПЧА WBV] Капча решена ✓", 5, false)
             writeCaptchaResult(token, identity)
-        } catch (e: IllegalStateException) {
-            val errorMsg = e.message ?: "WV state error"
-            updateProcessLog(identity, "captcha_wv_err", "[КАПЧА WBV] $errorMsg", 5, true)
-            writeCaptchaResult("error:$errorMsg", identity)
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             updateProcessLog(identity, "captcha_wv_err", "[КАПЧА WBV] Таймаут WebView", 5, true)
             writeCaptchaResult("error:timeout", identity)
         } catch (e: kotlin.coroutines.cancellation.CancellationException) {
             updateProcessLog(identity, "captcha_wv_err", "[КАПЧА WBV] Отменено", 5, true)
             writeCaptchaResult("error:cancelled", identity)
+        } catch (e: IllegalStateException) {
+            val errorMsg = e.message ?: "WV state error"
+            updateProcessLog(identity, "captcha_wv_err", "[КАПЧА WBV] $errorMsg", 5, true)
+            writeCaptchaResult("error:$errorMsg", identity)
         } catch (e: Exception) {
             val errorMsg = e.message ?: "${e::class.simpleName}"
             if (errorMsg != "tunnel stopped") {
@@ -1659,6 +1924,163 @@ object TunnelManager {
             }
         }
         return ManlCaptchaWebViewManager.solveCaptchaAsync(ctx, redirectUri, sessionToken)
+    }
+
+    fun parseServerRoutingRuleJson(routingJsonStr: String): ServerRoutingRule? {
+        return try {
+            val json = org.json.JSONObject(routingJsonStr)
+            val mode = json.optString("mode", "blacklist")
+            val isWhite = json.optBoolean("domains_is_whitelist", mode == "whitelist")
+            val packagesJson = json.optJSONArray("packages")
+            val packagesList = mutableListOf<String>()
+            if (packagesJson != null) {
+                for (i in 0 until packagesJson.length()) {
+                    val p = packagesJson.optString(i).trim()
+                    if (p.isNotEmpty()) packagesList.add(p)
+                }
+            }
+            val domainsJson = json.optJSONArray("domains")
+            val domainsList = mutableListOf<String>()
+            if (domainsJson != null) {
+                for (i in 0 until domainsJson.length()) {
+                    val d = domainsJson.optString(i).trim()
+                    if (d.isNotEmpty()) domainsList.add(d)
+                }
+            }
+            val templateDomains = json.optBoolean("template_domains", false)
+            val ipMode = json.optString("ip_mode", "blacklist")
+            val ipIsWhite = json.optBoolean("ip_is_whitelist", ipMode == "whitelist")
+            val ipsJson = json.optJSONArray("ips")
+            val ipsList = mutableListOf<String>()
+            if (ipsJson != null) {
+                for (i in 0 until ipsJson.length()) {
+                    val ip = ipsJson.optString(i).trim()
+                    if (ip.isNotEmpty()) ipsList.add(ip)
+                }
+            }
+            ServerRoutingRule(
+                isWhite = isWhite,
+                packages = packagesList,
+                domains = domainsList,
+                templateDomains = templateDomains,
+                ipIsWhite = ipIsWhite,
+                ips = ipsList,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun applyServerRoutingRule(newServerRule: ServerRoutingRule?, clientIp: String, dns: String) {
+        val previousRule = activeServerRoutingRule.value
+        activeServerRoutingRule.value = newServerRule
+        serverRoutingActive.value = (newServerRule != null)
+
+        activeContext()?.let { ctx ->
+            if (newServerRule != null) {
+                updateDomainRouting(
+                    enabled = newServerRule.templateDomains || newServerRule.domains.isNotEmpty(),
+                    excludeRuZones = false,
+                    templateDomains = newServerRule.templateDomains,
+                    directDomains = newServerRule.domains.joinToString(","),
+                    isWhitelist = newServerRule.isWhite,
+                    ipRoutingEnabled = newServerRule.ips.isNotEmpty(),
+                    ipIsWhitelist = newServerRule.ipIsWhite,
+                    directIps = newServerRule.ips.joinToString(","),
+                )
+                val vpnInputsChanged = previousRule == null ||
+                    previousRule.isWhite != newServerRule.isWhite ||
+                    previousRule.packages.toSet() != newServerRule.packages.toSet()
+                if (vpnReady.value && vpnInputsChanged) {
+                    val reloadIntent = Intent(ctx, TunVpnService::class.java).apply {
+                        action = "RELOAD_ROUTING"
+                        putExtra("client_ip", clientIp)
+                        putExtra("dns", dns)
+                        putExtra("reason", "routing_changed")
+                    }
+                    startTunVpnService(ctx, reloadIntent)
+                }
+            } else if (previousRule != null) {
+                activeScope.launch {
+                    val settingsStore = SettingsStore(ctx)
+                    val domainWhite = settingsStore.domainIsWhitelist.first()
+                    val domainEnabled = settingsStore.domainRoutingEnabled.first()
+                    val excludeRu = settingsStore.excludeRuZonesEnabled.first()
+                    val templateEnabled = settingsStore.templateDomainsEnabled.first()
+                    val domains = if (domainWhite) settingsStore.directDomainsWhite.first() else settingsStore.directDomainsBlack.first()
+                    val ipWhite = settingsStore.ipIsWhitelist.first()
+                    val ipEnabled = settingsStore.ipRoutingEnabled.first()
+                    val ips = if (ipWhite) settingsStore.directIpsWhite.first() else settingsStore.directIpsBlack.first()
+                    val hasDomains = if (domainWhite) domains.isNotBlank() else (domains.isNotBlank() || templateEnabled || excludeRu)
+                    val effectiveDomainEnabled = domainEnabled && hasDomains
+                    val hasIps = ips.isNotBlank()
+                    val effectiveIpEnabled = ipEnabled && hasIps
+                    updateDomainRouting(
+                        enabled = effectiveDomainEnabled,
+                        excludeRuZones = if (domainWhite) false else excludeRu,
+                        templateDomains = if (domainWhite) false else templateEnabled,
+                        directDomains = domains,
+                        isWhitelist = domainWhite,
+                        ipRoutingEnabled = effectiveIpEnabled,
+                        ipIsWhitelist = ipWhite,
+                        directIps = ips,
+                    )
+                    if (vpnReady.value) {
+                        val reloadIntent = Intent(ctx, TunVpnService::class.java).apply {
+                            action = "RELOAD_ROUTING"
+                            putExtra("client_ip", clientIp)
+                            putExtra("dns", dns)
+                            putExtra("reason", "routing_cleared")
+                        }
+                        startTunVpnService(ctx, reloadIntent)
+                    }
+                }
+            }
+        }
+    }
+
+    fun updateDomainRouting(
+        enabled: Boolean,
+        excludeRuZones: Boolean,
+        templateDomains: Boolean,
+        directDomains: String,
+        isWhitelist: Boolean = false,
+        ipRoutingEnabled: Boolean = false,
+        ipIsWhitelist: Boolean = false,
+        directIps: String = "",
+    ) {
+        val identity = processIdentity ?: return
+        val command = "UPDATE_DOMAINS|enabled=${if (enabled) 1 else 0};ru=${if (excludeRuZones) 1 else 0};template=${if (templateDomains) 1 else 0};whitelist=${if (isWhitelist) 1 else 0};domains=$directDomains;ip_enabled=${if (ipRoutingEnabled) 1 else 0};ip_whitelist=${if (ipIsWhitelist) 1 else 0};ips=$directIps"
+        writeProcessCommand(identity, command, "domain_routing_err")
+    }
+
+    fun pushLocalRouting(ctx: Context) {
+        if (serverRoutingActive.value) return
+        activeScope.launch {
+            val settingsStore = SettingsStore(ctx)
+            val domainWhite = settingsStore.domainIsWhitelist.first()
+            val domainEnabled = settingsStore.domainRoutingEnabled.first()
+            val excludeRu = settingsStore.excludeRuZonesEnabled.first()
+            val templateEnabled = settingsStore.templateDomainsEnabled.first()
+            val domains = if (domainWhite) settingsStore.directDomainsWhite.first() else settingsStore.directDomainsBlack.first()
+            val ipWhite = settingsStore.ipIsWhitelist.first()
+            val ipEnabled = settingsStore.ipRoutingEnabled.first()
+            val ips = if (ipWhite) settingsStore.directIpsWhite.first() else settingsStore.directIpsBlack.first()
+            val hasDomains = if (domainWhite) domains.isNotBlank() else (domains.isNotBlank() || templateEnabled || excludeRu)
+            val effectiveDomainEnabled = domainEnabled && hasDomains
+            val hasIps = ips.isNotBlank()
+            val effectiveIpEnabled = ipEnabled && hasIps
+            updateDomainRouting(
+                enabled = effectiveDomainEnabled,
+                excludeRuZones = if (domainWhite) false else excludeRu,
+                templateDomains = if (domainWhite) false else templateEnabled,
+                directDomains = domains,
+                isWhitelist = domainWhite,
+                ipRoutingEnabled = effectiveIpEnabled,
+                ipIsWhitelist = ipWhite,
+                directIps = ips,
+            )
+        }
     }
 
     private fun writeCaptchaResult(result: String, identity: ProcessIdentity) {
@@ -1724,12 +2146,31 @@ data class TunnelParams(
     val captchaMode: String = "auto",
     val captchaSolveMethod: String = "auto",
     val fingerprint: String = "firefox",
-    val clientIds: String = "8202606,6287487",
+    val clientIds: String = CsqttConstants.Tunnel.DEFAULT_CLIENT_IDS,
     val obfsMode: String = CsqttConstants.Tunnel.DEFAULT_OBFS_MODE,
     val turnTransport: String = CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT,
+    val srtpMode: String = CsqttConstants.SrtpMode.DEFAULT,
     val generationId: Long = 0,
     val sessionSalt: String = "",
     val allowHashRedistribution: Boolean = false,
     val vkHashMode: String = CsqttConstants.VkAutoHash.MODE_MANUAL,
     val vkAccessToken: String = "",
+    val customTurnIps: String = "",
+    val domainRoutingEnabled: Boolean = false,
+    val domainIsWhitelist: Boolean = false,
+    val excludeRuZones: Boolean = false,
+    val templateDomains: Boolean = false,
+    val directDomains: String = "",
+    val ipRoutingEnabled: Boolean = false,
+    val ipIsWhitelist: Boolean = false,
+    val directIps: String = "",
+)
+
+data class ServerRoutingRule(
+    val isWhite: Boolean,
+    val packages: List<String>,
+    val domains: List<String>,
+    val templateDomains: Boolean,
+    val ipIsWhite: Boolean = false,
+    val ips: List<String> = emptyList(),
 )

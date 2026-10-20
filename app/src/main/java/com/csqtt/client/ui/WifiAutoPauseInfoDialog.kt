@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.csqtt.client.ui.design.CsqttShapes
+import com.csqtt.client.ui.design.CsqttSizes
 
 @Composable
 internal fun WifiAutoPauseInfoDialog(onDismiss: () -> Unit) {
@@ -31,14 +30,15 @@ internal fun WifiAutoPauseInfoDialog(onDismiss: () -> Unit) {
     ) {
         Surface(
             shape = CsqttShapes.Dialog,
-            color = MaterialTheme.colorScheme.surface,
+            color = appSectionCardColor(),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 6.dp,
-            modifier = Modifier.fillMaxWidth(0.9f),
+            border = BorderStroke(1.dp, appSectionCardBorderColor()),
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth(0.92f),
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     "Автопауза при Wi-Fi",
@@ -47,18 +47,17 @@ internal fun WifiAutoPauseInfoDialog(onDismiss: () -> Unit) {
                 )
                 Text(
                     "Когда функция включена и устройство подключается к Wi-Fi, CSQTT переходит в ожидание и отключает свой VPN-сервис. После отключения Wi-Fi CSQTT автоматически возвращается к обычному подключению, если до паузы он был включён.\n\nПо умолчанию функция выключена.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 20.sp,
+                    lineHeight = 16.sp,
                 )
-                Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
                     shape = CsqttShapes.Pill,
                     colors = ButtonDefaults.buttonColors(contentColor = MaterialTheme.colorScheme.onPrimary),
                 ) {
-                    Text("Понятно", fontWeight = FontWeight.SemiBold)
+                    Text("Понятно", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

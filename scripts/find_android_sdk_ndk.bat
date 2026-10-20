@@ -1,31 +1,15 @@
-@REM SPDX-FileCopyrightText: 2026 amurcanov
-@REM SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 @echo off
 setlocal enabledelayedexpansion
 
-:: Find Android SDK/NDK and export SDK_PATH + NDK_PATH + TOOLCHAIN to the caller.
-:: Usage (inside a script with enabledelayedexpansion):
-::   set "PROJECT_ROOT=..."
-::   call scripts\find_android_sdk_ndk.bat
-::
-:: Search order:
-::   SDK: ANDROID_HOME -> ANDROID_SDK_ROOT -> local.properties sdk.dir ->
-::        %%LOCALAPPDATA%%\Android\Sdk -> %%ProgramFiles%%\Android\android-sdk ->
-::        %%ProgramFiles(x86)%%\Android\android-sdk
-::   NDK: ANDROID_NDK_HOME -> ANDROID_NDK_ROOT -> %%SDK_PATH%%\ndk ->
-::        %%LOCALAPPDATA%%\Android\Sdk\ndk -> %%ProgramFiles%%\Android\ndk
 
 set "SDK_PATH="
 
-:: 1. ANDROID_HOME
 if defined ANDROID_HOME (
     if exist "%ANDROID_HOME%" (
         set "SDK_PATH=%ANDROID_HOME%"
     )
 )
 
-:: 2. ANDROID_SDK_ROOT
 if not defined SDK_PATH (
     if defined ANDROID_SDK_ROOT (
         if exist "%ANDROID_SDK_ROOT%" (
@@ -34,7 +18,6 @@ if not defined SDK_PATH (
     )
 )
 
-:: 3. local.properties (sdk.dir)
 if not defined SDK_PATH (
     if exist "%PROJECT_ROOT%local.properties" (
         for /f "tokens=1,* delims==" %%A in ('type "%PROJECT_ROOT%local.properties" ^| findstr /R /C:"^sdk\.dir="') do (
@@ -50,7 +33,6 @@ if not defined SDK_PATH (
     )
 )
 
-:: 4. Common Android Studio SDK locations
 if not defined SDK_PATH (
     if exist "%LOCALAPPDATA%\Android\Sdk" (
         set "SDK_PATH=%LOCALAPPDATA%\Android\Sdk"
@@ -69,7 +51,6 @@ if not defined SDK_PATH (
 )
 echo Using SDK: %SDK_PATH%
 
-:: Find NDK
 set "NDK_ROOT="
 
 if defined ANDROID_NDK_HOME (
@@ -115,8 +96,6 @@ if not defined NDK_ROOT (
     exit /b 1
 )
 
-:: Detect whether NDK_ROOT is a parent of versioned folders or a single NDK install.
-:: dir /o-n selects the newest installed version first (for example 30 before 29).
 set "NDK_VER="
 for /f "delims=" %%D in ('dir /b /ad /o-n "%NDK_ROOT%" 2^>nul') do (
     if not defined NDK_VER if exist "%NDK_ROOT%\%%D\toolchains\llvm\prebuilt\windows-x86_64\bin" (
@@ -130,7 +109,6 @@ if defined NDK_VER (
     exit /b 0
 )
 
-:: NDK_ROOT points directly to one NDK installation.
 if exist "%NDK_ROOT%\toolchains\llvm\prebuilt\windows-x86_64\bin" (
     echo Using NDK: %NDK_ROOT%
     endlocal & set "SDK_PATH=%SDK_PATH%" & set "NDK_PATH=%NDK_ROOT%" & set "NDK_VERSION=" & set "TOOLCHAIN=%NDK_ROOT%\toolchains\llvm\prebuilt\windows-x86_64\bin"

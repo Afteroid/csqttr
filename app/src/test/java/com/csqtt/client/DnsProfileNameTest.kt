@@ -7,7 +7,10 @@ class DnsProfileNameTest {
     @Test
     fun `known server dns profiles have stable display names`() {
         assertEquals("Yandex DNS", dnsProfileName("77.88.8.8,77.88.8.1"))
+        assertEquals("Xbox DNS", dnsProfileName("111.88.96.54,111.88.96.55"))
         assertEquals("Xbox DNS", dnsProfileName("111.88.96.50,111.88.96.51"))
+        assertEquals("Geohide DNS", dnsProfileName("193.233.112.67,193.233.112.88"))
+        assertEquals("Geohide DNS", dnsProfileName("95.182.120.241,37.230.192.51"))
         assertEquals("BI.ZONE DNS", dnsProfileName("195.208.6.1,195.208.7.1"))
         assertEquals("НСДИ DNS", dnsProfileName("195.208.4.1,195.208.5.1"))
     }

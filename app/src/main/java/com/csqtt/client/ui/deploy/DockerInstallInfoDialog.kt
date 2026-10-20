@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.csqtt.client.ui.design.CsqttShapes
+import com.csqtt.client.ui.design.CsqttSizes
 
 @Composable
 internal fun DockerInstallInfoDialog(onDismiss: () -> Unit) {
@@ -31,14 +30,15 @@ internal fun DockerInstallInfoDialog(onDismiss: () -> Unit) {
     ) {
         Surface(
             shape = CsqttShapes.Dialog,
-            color = MaterialTheme.colorScheme.surface,
+            color = appSectionCardColor(),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 6.dp,
-            modifier = Modifier.fillMaxWidth(0.9f),
+            border = BorderStroke(1.dp, appSectionCardBorderColor()),
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth(0.92f),
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     "Установка в Docker",
@@ -47,30 +47,29 @@ internal fun DockerInstallInfoDialog(onDismiss: () -> Unit) {
                 )
                 Text(
                     text = "Если включено, CSQTT устанавливается и запускается в отдельном Docker-контейнере вместо службы csqtt.service. Если Docker отсутствует, установщик загрузит актуальную стабильную версию и запустит Docker автоматически.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 20.sp,
+                    lineHeight = 16.sp,
                 )
                 Text(
                     text = "Для максимальной совместимости контейнер запускается в privileged-режиме, использует сеть VPS и /dev/net/tun. Это открывает контейнеру доступ к возможностям ядра и устройствам VPS, включая io_uring и netfilter, но заметно ослабляет изоляцию Docker.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 20.sp,
+                    lineHeight = 16.sp,
                 )
                 Text(
                     text = "Конфигурация и база клиентов остаются на VPS в /etc/csqtt и используются одинаково в Docker и systemd. Контейнер автоматически запускается после перезагрузки. Включайте этот режим только на доверенном VPS, где вы принимаете риск расширенных прав контейнера.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 20.sp,
+                    lineHeight = 16.sp,
                 )
-                Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
                     shape = CsqttShapes.Pill,
                     colors = ButtonDefaults.buttonColors(contentColor = MaterialTheme.colorScheme.onPrimary),
                 ) {
-                    Text("Понятно", fontWeight = FontWeight.SemiBold)
+                    Text("Понятно", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

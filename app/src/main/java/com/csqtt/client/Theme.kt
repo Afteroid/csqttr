@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import android.os.Build
@@ -255,6 +252,7 @@ object CSQTTColors {
     val terminalCounter = Color(0xFF1E88E5)
 
     val donate = Color(0xFF8B3FFD)
+    val telegram = Color(0xFF24A1DE)
 }
 
 @Composable

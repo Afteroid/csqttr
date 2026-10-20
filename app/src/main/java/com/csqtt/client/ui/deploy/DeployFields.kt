@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -17,6 +14,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -31,14 +29,19 @@ import com.csqtt.client.ui.design.CsqttSpacing
 internal fun DeployTextField(
     value: String,
     onValueChange: (String) -> Unit,
-    label: String,
+    label: String? = null,
     modifier: Modifier = Modifier,
     placeholder: String? = null,
     enabled: Boolean = true,
+    readOnly: Boolean = false,
     isError: Boolean = false,
     keyboardType: KeyboardType = KeyboardType.Text,
     imeAction: ImeAction = ImeAction.Next,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    maxLines: Int = 1,
+    textColor: Color? = null,
     trailingContent: (@Composable () -> Unit)? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -47,24 +50,29 @@ internal fun DeployTextField(
         value = value,
         onValueChange = onValueChange,
         enabled = enabled,
-        singleLine = true,
+        readOnly = readOnly,
+        singleLine = singleLine,
+        minLines = minLines,
+        maxLines = maxLines,
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
         visualTransformation = visualTransformation,
         interactionSource = interactionSource,
-        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+        textStyle = MaterialTheme.typography.bodyLarge.copy(color = textColor ?: MaterialTheme.colorScheme.onSurface),
         modifier = modifier.fillMaxWidth(),
         decorationBox = { innerTextField ->
             OutlinedTextFieldDefaults.DecorationBox(
                 value = value,
                 innerTextField = innerTextField,
                 enabled = enabled,
-                singleLine = true,
+                singleLine = singleLine,
                 visualTransformation = visualTransformation,
                 interactionSource = interactionSource,
                 isError = isError,
-                label = { Text(label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
+                label = label?.takeIf { it.isNotBlank() }?.let { text ->
+                    { Text(text, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+                },
                 placeholder = placeholder?.let {
-                    { Text(it, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+                    { Text(it, maxLines = if (singleLine) 1 else maxLines, softWrap = true, overflow = TextOverflow.Ellipsis) }
                 },
                 trailingIcon = trailingContent,
                 colors = colors,

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import org.junit.Assert.assertFalse
@@ -17,10 +14,21 @@ class DeployUiStateTest {
     )
 
     @Test
-    fun `install requires tunnel and web authorization`() {
+    fun `install requires web authorization`() {
+        assertTrue(completeState.canInstall)
+        assertFalse(completeState.copy(webPanelConfigured = false).canInstall)
+    }
+
+    @Test
+    fun `install requires main password authorization`() {
         assertTrue(completeState.canInstall)
         assertFalse(completeState.copy(mainPasswordConfigured = false).canInstall)
-        assertFalse(completeState.copy(webPanelConfigured = false).canInstall)
+        assertTrue(isDeployMainPasswordValid("0123456789abcdef"))
+        assertFalse(isDeployMainPasswordValid("0123456789abcde"))
+        assertFalse(isDeployMainPasswordValid("short"))
+        assertFalse(isDeployMainPasswordValid(""))
+        assertFalse(isDeployMainPasswordValid("0123456789abcdefg"))
+        assertFalse(isDeployMainPasswordValid("0123456789abcde!"))
     }
 
     @Test

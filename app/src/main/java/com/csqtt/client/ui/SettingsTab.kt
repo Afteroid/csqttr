@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import com.csqtt.client.showRaisedToast
@@ -19,6 +16,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -60,6 +61,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.widget.Toast
 
 private const val WORKERS_PER_GROUP = CsqttConstants.Tunnel.WORKERS_PER_GROUP
@@ -102,11 +105,13 @@ internal fun SettingsTabContent(
         .collectAsStateWithLifecycle(initialValue = SettingsStore.cachedWorkersPerHash)
 
     val activeProfile = tunnelAuthSettings.profile
-    val csqttLinkMode by settingsStore.csqttLinkMode.collectAsStateWithLifecycle(initialValue = false)
-    val csqttLink by settingsStore.csqttLink.collectAsStateWithLifecycle(initialValue = "")
-    val manualPortsEnabled by settingsStore.manualPortsEnabled.collectAsStateWithLifecycle(initialValue = false)
+    val csqttLinkMode = tunnelAuthSettings.csqttLinkMode
+    val csqttLink = tunnelAuthSettings.csqttLink
+    val manualPortsEnabled by settingsStore.manualPortsEnabled.collectAsStateWithLifecycle(
+        initialValue = SettingsStore.cachedManualPortsEnabled ?: false,
+    )
     val savedServerPeerPort by settingsStore.serverPeerPort.collectAsStateWithLifecycle(
-        initialValue = CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT,
+        initialValue = SettingsStore.cachedServerPeerPort ?: CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT,
     )
 
     val activeFingerprint by settingsStore.selectedFingerprint.collectAsStateWithLifecycle(initialValue = CsqttConstants.Tunnel.DEFAULT_FINGERPRINT)
@@ -115,46 +120,65 @@ internal fun SettingsTabContent(
     val vkHashCheckResults = remember(vkHashCheckResultsJson) {
         VkHashValidationCodec.decode(vkHashCheckResultsJson)
     }
-    val savedObfsMode by settingsStore.obfsMode.collectAsStateWithLifecycle(
-        initialValue = CsqttConstants.Tunnel.DEFAULT_OBFS_MODE,
-    )
-    val obfsModeLoaded by settingsStore.obfsMode.collectAsStateWithLifecycle(initialValue = SettingsStore.cachedObfsMode)
-    val turnTransportLoaded by settingsStore.turnTransport.collectAsStateWithLifecycle(initialValue = SettingsStore.cachedTurnTransport)
-    val linkModeLoaded by settingsStore.csqttLinkMode.collectAsStateWithLifecycle(initialValue = SettingsStore.cachedCsqttLinkMode)
     val savedHashMode by settingsStore.vkHashMode.collectAsStateWithLifecycle(initialValue = SettingsStore.cachedVkHashMode)
     val savedVkAccessToken by settingsStore.vkAccessToken.collectAsStateWithLifecycle(initialValue = SettingsStore.cachedVkAccessToken)
+    val connectionPassword by settingsStore.connectionPassword.collectAsStateWithLifecycle(initialValue = "")
+    var showSecretsDialog by rememberSaveable { mutableStateOf(false) }
 
     val tunnelRunning by TunnelManager.running.collectAsStateWithLifecycle()
-    var showObfsGeneralDialog by rememberSaveable { mutableStateOf(false) }
-    var showObfsDetailDialog by rememberSaveable { mutableStateOf<String?>(null) }
-    var showTurnTransportGeneralDialog by rememberSaveable { mutableStateOf(false) }
-    var showTurnTransportDetailDialog by rememberSaveable { mutableStateOf<String?>(null) }
     var showHashModeGeneralDialog by rememberSaveable { mutableStateOf(false) }
     var showHashModeDetailDialog by rememberSaveable { mutableStateOf<String?>(null) }
     var showWorkModeGeneralDialog by rememberSaveable { mutableStateOf(false) }
     var showWorkModeDetailDialog by rememberSaveable { mutableStateOf<String?>(null) }
     var showVkRevokeDialog by rememberSaveable { mutableStateOf(false) }
-    var showSecretsDialog by rememberSaveable { mutableStateOf(false) }
     var vkAuthMode by rememberSaveable { mutableStateOf(CsqttConstants.VkAuth.MODE_CALLS) }
     val autoJsRiskAcknowledged by settingsStore.autoJsRiskAcknowledged.collectAsStateWithLifecycle(initialValue = false)
-    val tcpTransportRiskAcknowledged by settingsStore.tcpTransportRiskAcknowledged.collectAsStateWithLifecycle(initialValue = false)
     var showAutoJsRiskDialog by remember { mutableStateOf(false) }
-    var showTcpTransportRiskDialog by remember { mutableStateOf(false) }
     var showWorkersInfoDialog by rememberSaveable { mutableStateOf(false) }
     var pendingAutoJsSelection by remember { mutableStateOf<(() -> Unit)?>(null) }
-    var pendingTcpTransportSelection by remember { mutableStateOf<(() -> Unit)?>(null) }
     var showRequiredFieldErrors by rememberSaveable(activeProfile) { mutableStateOf(false) }
 
-    val hashSettingsLoaded = savedHashMode != null && savedVkAccessToken != null
-    val accountAutoJsMode = vkAuthMode == CsqttConstants.VkAuth.MODE_AUTO_JS
-    val autoHashMode = accountAutoJsMode || (
-        savedHashMode != null && savedHashMode != CsqttConstants.VkAutoHash.MODE_MANUAL
+    val turnTransport by settingsStore.turnTransport.collectAsStateWithLifecycle(
+        initialValue = SettingsStore.cachedTurnTransport ?: CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT,
     )
-    val vkTokenActive = savedVkAccessToken?.isNotBlank() == true
+    val tcpTransportRiskAcknowledged by settingsStore.tcpTransportRiskAcknowledged.collectAsStateWithLifecycle(
+        initialValue = false,
+    )
+    var showTurnTransportGeneralDialog by rememberSaveable { mutableStateOf(false) }
+    var showTurnTransportDetailDialog by rememberSaveable { mutableStateOf<String?>(null) }
+    var showTcpTransportRiskDialog by remember { mutableStateOf(false) }
+    var pendingTcpTransportSelection by remember { mutableStateOf<(() -> Unit)?>(null) }
 
+    fun applyTurnTransport(transport: String) {
+        scope.launch { settingsStore.saveTurnTransport(transport) }
+    }
+
+    val srtpMode by settingsStore.srtpMode.collectAsStateWithLifecycle(
+        initialValue = SettingsStore.cachedSrtpMode ?: CsqttConstants.SrtpMode.DEFAULT,
+    )
+
+    fun applySrtpMode(mode: String) {
+        scope.launch { settingsStore.saveSrtpMode(mode) }
+    }
+
+    fun requestTurnTransport(transport: String) {
+        if (shouldConfirmTcpTransport(turnTransport, transport, tcpTransportRiskAcknowledged)) {
+            pendingTcpTransportSelection = { applyTurnTransport(transport) }
+            showTcpTransportRiskDialog = true
+        } else {
+            applyTurnTransport(transport)
+        }
+    }
+
+    val hashSettingsLoaded = savedHashMode != null && savedVkAccessToken != null
     var peerInput by rememberSaveable { mutableStateOf("") }
     var peerPortInput by rememberSaveable(activeProfile) {
-        mutableStateOf(CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT.toString())
+        val initialPort = if (SettingsStore.cachedManualPortsEnabled == true) {
+            (SettingsStore.cachedServerPeerPort ?: CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT).toString()
+        } else {
+            CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT.toString()
+        }
+        mutableStateOf(initialPort)
     }
     var vkHash1 by rememberSaveable { mutableStateOf("") }
     var vkHash2 by rememberSaveable { mutableStateOf("") }
@@ -163,8 +187,6 @@ internal fun SettingsTabContent(
     var vkHash5 by rememberSaveable { mutableStateOf("") }
     var vkHash6 by rememberSaveable { mutableStateOf("") }
     var showHashesDialog by rememberSaveable { mutableStateOf(false) }
-    var obfsMode by rememberSaveable { mutableStateOf(CsqttConstants.Tunnel.DEFAULT_OBFS_MODE) }
-    var turnTransport by rememberSaveable { mutableStateOf(CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT) }
     var autoCaptchaEnabled by rememberSaveable { mutableStateOf(true) }
     var useWVCaptcha by rememberSaveable { mutableStateOf(false) }
     var isManualMode by rememberSaveable { mutableStateOf(true) }
@@ -173,10 +195,9 @@ internal fun SettingsTabContent(
     var peerPortSaveJob by remember { mutableStateOf<Job?>(null) }
     var peerPortEdited by rememberSaveable(activeProfile) { mutableStateOf(false) }
     var linkSaveJob by remember { mutableStateOf<Job?>(null) }
-    var linkText by remember { mutableStateOf(csqttLink) }
-    var loadedLinkMode by remember(activeProfile) { mutableStateOf<Boolean?>(null) }
+    var linkText by remember(activeProfile, csqttLink) { mutableStateOf(csqttLink) }
     var initialized by rememberSaveable(activeProfile) { mutableStateOf(false) }
-    val participantMode = loadedLinkMode ?: csqttLinkMode
+    val participantMode = csqttLinkMode
 
     val allHashes = remember(vkHash1, vkHash2, vkHash3, vkHash4, vkHash5, vkHash6) {
         listOf(vkHash1, vkHash2, vkHash3, vkHash4, vkHash5, vkHash6)
@@ -186,51 +207,40 @@ internal fun SettingsTabContent(
     }
     val parsedCsqttLink = remember(linkText) { parseCsqttLink(linkText) }
     val linkHashes = parsedCsqttLink?.hashes.orEmpty()
+    val linkVkAccessToken = parsedCsqttLink?.vkAccessToken.orEmpty()
+    val serverWorkers by TunnelManager.serverAssignedWorkers.collectAsState()
+    val effectiveServerWorkers = serverWorkers.takeIf { tunnelRunning && it in 3..100 }
+    val linkTokenActive = participantMode && linkVkAccessToken.isNotEmpty()
+    val effectiveVkAuthMode = if (
+        participantMode && linkHashes.isNotEmpty() && vkAuthMode == CsqttConstants.VkAuth.MODE_AUTO_JS
+    ) {
+        CsqttConstants.VkAuth.MODE_CALLS
+    } else {
+        vkAuthMode
+    }
+    val effectiveHashMode = if (
+        linkTokenActive && savedHashMode == CsqttConstants.VkAutoHash.MODE_MANUAL
+    ) {
+        CsqttConstants.VkAutoHash.MODE_AUTO_API
+    } else {
+        savedHashMode
+    }
+    val accountAutoJsMode = effectiveVkAuthMode == CsqttConstants.VkAuth.MODE_AUTO_JS
+    val autoHashMode = accountAutoJsMode || (
+        effectiveHashMode != null && effectiveHashMode != CsqttConstants.VkAutoHash.MODE_MANUAL
+    )
+    val vkTokenActive = savedVkAccessToken?.isNotBlank() == true
+    val effectiveVkTokenActive = vkTokenActive || linkTokenActive
     val filledHashCount = remember(vkHash1, vkHash2, vkHash3, vkHash4, vkHash5, vkHash6) { uniqueHashes.size }
     val combinedHashes = remember(vkHash1, vkHash2, vkHash3, vkHash4, vkHash5, vkHash6) {
         allHashes.filter { it.isNotBlank() && it.length >= 16 }.distinct().joinToString(",")
     }
-    val extraWorkers = remember(settingsStore) {
-        settingsStore.extraWorkers
-        .map<Boolean, Boolean?> { it }
-    }
-    val extraWorkersEnabled by extraWorkers
-        .collectAsStateWithLifecycle(initialValue = SettingsStore.cachedExtraWorkers)
-    val effectiveExtraWorkersEnabled = extraWorkersEnabled == true && !accountAutoJsMode
-
-    val dynamicMaxWorkers = remember(
-        filledHashCount,
-        hashSettingsLoaded,
-        autoHashMode,
-        participantMode,
-        linkHashes,
-        accountAutoJsMode,
-        effectiveExtraWorkersEnabled,
-    ) {
-        val sourceMaximum = if (!hashSettingsLoaded) {
-            CsqttConstants.Tunnel.MAX_WORKERS.toFloat()
-        } else {
-            WorkerCountPolicy.maximumForSources(
-                linkMode = participantMode,
-                linkHashCount = linkHashes.size,
-                autoHashMode = autoHashMode,
-                manualHashCount = filledHashCount,
-            ).toFloat()
-        }
-        if (!effectiveExtraWorkersEnabled) {
-            sourceMaximum.coerceAtMost(CsqttConstants.Tunnel.DEFAULT_MAX_WORKERS.toFloat())
-        } else {
-            sourceMaximum
-        }
-    }
-    val selectableMaxWorkers = remember(dynamicMaxWorkers) {
-        roundToGroup(dynamicMaxWorkers, dynamicMaxWorkers)
-    }
+    val selectableMaxWorkers = CsqttConstants.Tunnel.MAX_WORKERS.toFloat()
     var sniInput by rememberSaveable { mutableStateOf("") }
 
     val currentWorkers = roundToGroup(
         (savedWorkersPerHash ?: WORKERS_PER_GROUP).toFloat()
-            .coerceIn(WORKERS_PER_GROUP.toFloat(), selectableMaxWorkers),
+            .coerceIn(5f, selectableMaxWorkers),
         selectableMaxWorkers,
     )
 
@@ -267,14 +277,6 @@ internal fun SettingsTabContent(
             .joinToString(",")
     }
 
-    LaunchedEffect(csqttLink) {
-        linkText = csqttLink
-    }
-
-    LaunchedEffect(csqttLinkMode) {
-        if (initialized) loadedLinkMode = csqttLinkMode
-    }
-
     LaunchedEffect(activeProfile) {
         saveJob?.cancel()
         linkSaveJob?.cancel()
@@ -285,17 +287,19 @@ internal fun SettingsTabContent(
         val captchaMode = settingsStore.captchaMode.first()
         val captchaMethod = settingsStore.captchaSolveMethod.first()
         val wbvCaptchaMethod = settingsStore.captchaWbvSolveMethod.first()
-        val profileLink = settingsStore.csqttLink.first()
-        val profileLinkMode = settingsStore.csqttLinkMode.first()
         
         peerInput = peer
+        val port = settingsStore.serverPeerPort.first()
+        val manual = settingsStore.manualPortsEnabled.first()
+        if (!peerPortEdited) {
+            val targetPort = if (manual) port.toString() else CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT.toString()
+            if (peerPortInput != targetPort) {
+                peerPortInput = targetPort
+            }
+        }
         parseHashes(hashes)
-        linkText = profileLink
-        loadedLinkMode = profileLinkMode
         vkAuthMode = loadedVkAuthMode
         sniInput = settingsStore.sni.first()
-        obfsMode = savedObfsMode
-        turnTransport = settingsStore.turnTransport.first()
         autoCaptchaEnabled = captchaMode == "auto"
         useWVCaptcha = captchaMode != "rjs"
         wbvManualMode = wbvCaptchaMethod != "auto"
@@ -306,10 +310,13 @@ internal fun SettingsTabContent(
 
     LaunchedEffect(activeProfile, manualPortsEnabled, savedServerPeerPort) {
         if (!peerPortEdited) {
-            peerPortInput = if (manualPortsEnabled) {
+            val targetPort = if (manualPortsEnabled) {
                 savedServerPeerPort.toString()
             } else {
                 CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT.toString()
+            }
+            if (peerPortInput != targetPort) {
+                peerPortInput = targetPort
             }
         }
     }
@@ -317,27 +324,12 @@ internal fun SettingsTabContent(
     LaunchedEffect(activeProfile, manualPortsEnabled) {
         if (!manualPortsEnabled) {
             peerPortSaveJob?.cancel()
-            peerPortInput = CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT.toString()
+            val defaultPort = CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT.toString()
+            if (peerPortInput != defaultPort) {
+                peerPortInput = defaultPort
+            }
             peerPortEdited = false
         }
-    }
-
-    val tunnelUiReady = initialized &&
-        hashSettingsLoaded &&
-        obfsModeLoaded != null &&
-        turnTransportLoaded != null &&
-        linkModeLoaded != null &&
-        savedWorkersPerHash != null &&
-        extraWorkersEnabled != null
-    if (!tunnelUiReady) {
-        CsqttScreen {
-            Spacer(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-            )
-        }
-        return
     }
 
     DisposableEffect(Unit) {
@@ -366,8 +358,6 @@ internal fun SettingsTabContent(
     fun scheduleSave() {
         saveJob?.cancel()
         saveJob = scope.launch {
-            // Debounce: one DataStore rewrite per pause in typing/slider moves,
-            // not one per keystroke or slider frame.
             delay(300)
             if (participantMode) {
                 settingsStore.saveParticipantTunnelSettings(combinedHashes, currentWorkers.toInt())
@@ -414,23 +404,15 @@ internal fun SettingsTabContent(
         }
     }
 
-    fun applyTurnTransport(transport: String) {
-        turnTransport = transport
-        scope.launch { settingsStore.saveTurnTransport(transport) }
-    }
-
-    fun requestTurnTransport(transport: String) {
-        if (shouldConfirmTcpTransport(turnTransport, transport, tcpTransportRiskAcknowledged)) {
-            pendingTcpTransportSelection = { applyTurnTransport(transport) }
-            showTcpTransportRiskDialog = true
-        } else {
-            applyTurnTransport(transport)
-        }
-    }
-
-    LaunchedEffect(accountAutoJsMode, extraWorkersEnabled) {
-        if (accountAutoJsMode && extraWorkersEnabled == true) {
-            settingsStore.saveExtraWorkers(false)
+    LaunchedEffect(initialized, participantMode, linkHashes, linkTokenActive, vkAuthMode, savedHashMode) {
+        if (!initialized || !participantMode) return@LaunchedEffect
+        when {
+            linkHashes.isNotEmpty() && vkAuthMode == CsqttConstants.VkAuth.MODE_AUTO_JS -> {
+                applyWorkMode(CsqttConstants.VkAuth.MODE_CALLS)
+            }
+            linkTokenActive && savedHashMode == CsqttConstants.VkAutoHash.MODE_MANUAL -> {
+                applyHashMode(CsqttConstants.VkAutoHash.MODE_AUTO_API)
+            }
         }
     }
 
@@ -447,14 +429,15 @@ internal fun SettingsTabContent(
     val isPeerPortValid = peerPortInput.toIntOrNull() in 1..65535
     val hashesReadyForTunnel = when {
         participantMode && linkHashes.isNotEmpty() -> true
-        autoHashMode -> vkTokenActive
+        participantMode && linkTokenActive -> true
+        autoHashMode -> effectiveVkTokenActive
         else -> filledHashCount > 0
     }
     val peerRequiredError = showRequiredFieldErrors && !participantMode && !isPeerValid
     val peerPortRequiredError = showRequiredFieldErrors && !participantMode && manualPortsEnabled && !isPeerPortValid
     val linkRequiredError = showRequiredFieldErrors && participantMode && parsedCsqttLink == null
     val hashesRequiredError = showRequiredFieldErrors && !hashesReadyForTunnel
-    val authorizationRequiredError = showRequiredFieldErrors && !participantMode && tunnelAuthSettings.connectionPassword.isBlank()
+    val passwordRequiredError = showRequiredFieldErrors && !participantMode && connectionPassword.isBlank()
     if (showHashesDialog) {
         HashesDialog(
             hash1 = vkHash1,
@@ -471,6 +454,21 @@ internal fun SettingsTabContent(
             },
             onCheck = { hashes ->
                 VkHashValidator.check(context, hashes, activeFingerprint, activeClientIds)
+            },
+            onAutoSave = { h1, h2, h3, h4, h5, h6 ->
+                val cleaned1 = stripVkUrlStatic(h1)
+                val cleaned2 = stripVkUrlStatic(h2)
+                val cleaned3 = stripVkUrlStatic(h3)
+                val cleaned4 = stripVkUrlStatic(h4)
+                val cleaned5 = stripVkUrlStatic(h5)
+                val cleaned6 = stripVkUrlStatic(h6)
+                vkHash1 = cleaned1
+                vkHash2 = cleaned2
+                vkHash3 = cleaned3
+                vkHash4 = cleaned4
+                vkHash5 = cleaned5
+                vkHash6 = cleaned6
+                saveTunnelSettingsNow(normalizeHashes(cleaned1, cleaned2, cleaned3, cleaned4, cleaned5, cleaned6))
             },
             onSave = { h1, h2, h3, h4, h5, h6 ->
                 val cleaned1 = stripVkUrlStatic(h1)
@@ -489,22 +487,29 @@ internal fun SettingsTabContent(
                     showHashesDialog = false
                 }
             },
-            onDismiss = { showHashesDialog = false }
-        )
-    }
-
-    if (showSecretsDialog) {
-        SecretsDialog(
-            settingsStore = settingsStore,
-            initialPassword = tunnelAuthSettings.connectionPassword,
-            onSaved = {},
-            onDismiss = { showSecretsDialog = false },
+            onDismiss = {
+                saveTunnelSettingsNow(normalizeHashes(vkHash1, vkHash2, vkHash3, vkHash4, vkHash5, vkHash6)) {
+                    showHashesDialog = false
+                }
+            }
         )
     }
 
     if (showVkRevokeDialog) {
         VkTokenRevokeDialog(
             onCancel = { showVkRevokeDialog = false },
+            onCopyToken = {
+                val token = savedVkAccessToken.orEmpty()
+                if (token.isNotBlank()) {
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(ClipData.newPlainText("VK token", token))
+                        context.showRaisedToast("Бессрочный VK токен скопирован", Toast.LENGTH_SHORT)
+                    } else {
+                        context.showRaisedToast("Не удалось скопировать VK токен", Toast.LENGTH_SHORT)
+                    }
+                }
+            },
             onRevokeToken = {
                 showVkRevokeDialog = false
                 scope.launch { settingsStore.clearVkAccessToken() }
@@ -568,11 +573,20 @@ internal fun SettingsTabContent(
                             fontWeight = FontWeight.SemiBold,
                         )
                     } else {
+                        if (linkTokenActive) {
+                            Text(
+                                text = "VK токен из ссылки",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(bottom = 12.dp),
+                            )
+                        }
                         VkHashModeControls(
                             hashSettingsLoaded = hashSettingsLoaded,
                             autoHashMode = autoHashMode,
-                            savedHashMode = savedHashMode,
-                            vkTokenActive = vkTokenActive,
+                            savedHashMode = effectiveHashMode,
+                            vkTokenActive = effectiveVkTokenActive,
                             tunnelRunning = tunnelRunning,
                             filledHashCount = filledHashCount,
                             hasInputHashErrors = hasInputHashErrors || hashesRequiredError,
@@ -584,6 +598,8 @@ internal fun SettingsTabContent(
                             onLogin = onVkAuthRequested,
                             onRevokeToken = { showVkRevokeDialog = true },
                             authorizationRequiredError = hashesRequiredError && autoHashMode,
+                            manualAllowed = !linkTokenActive,
+                            tokenFromLink = linkTokenActive,
                         )
                     }
                 } else {
@@ -696,8 +712,8 @@ internal fun SettingsTabContent(
                     VkHashModeControls(
                         hashSettingsLoaded = hashSettingsLoaded,
                         autoHashMode = autoHashMode,
-                        savedHashMode = savedHashMode,
-                        vkTokenActive = vkTokenActive,
+                        savedHashMode = effectiveHashMode,
+                        vkTokenActive = effectiveVkTokenActive,
                         tunnelRunning = tunnelRunning,
                         filledHashCount = filledHashCount,
                         hasInputHashErrors = hasInputHashErrors || hashesRequiredError,
@@ -712,22 +728,23 @@ internal fun SettingsTabContent(
                     )
                 }
 
-                Spacer(Modifier.height(4.dp))
 
                 CompactDropdownSetting(
                     title = "Режим кредов",
-                    selectedKey = vkAuthMode,
+                    selectedKey = effectiveVkAuthMode,
                     options = listOf(
                         CsqttConstants.VkAuth.MODE_CAPTCHA to "Капча",
                         CsqttConstants.VkAuth.MODE_CALLS to "Авто",
                         CsqttConstants.VkAuth.MODE_AUTO_JS to "Авто ВК",
-                    ),
+                    ).filterNot { (mode, _) ->
+                        participantMode && linkHashes.isNotEmpty() && mode == CsqttConstants.VkAuth.MODE_AUTO_JS
+                    },
                     enabled = true,
                     indicatorProvider = { mode ->
                         when (mode) {
                             CsqttConstants.VkAuth.MODE_CAPTCHA -> ModeIndicator(progress = 0.30f, color = Color(0xFFE53935))
                             CsqttConstants.VkAuth.MODE_CALLS -> ModeIndicator(progress = 0.78f, color = Color(0xFF43A047))
-                            CsqttConstants.VkAuth.MODE_AUTO_JS -> ModeIndicator(progress = 1.0f, color = Color(0xFF43A047))
+                            CsqttConstants.VkAuth.MODE_AUTO_JS -> ModeIndicator(progress = 1.0f, color = Color(0xFF1475FD))
                             else -> null
                         }
                     },
@@ -736,32 +753,27 @@ internal fun SettingsTabContent(
                     onSelected = ::requestWorkMode,
                 )
 
-                Spacer(Modifier.height(4.dp))
-
                 CompactDropdownSetting(
-                    title = "Маскировка",
-                    selectedKey = obfsMode,
+                    title = "Режим SRTP",
+                    selectedKey = srtpMode,
                     options = listOf(
-                        "audio" to "Простая",
-                        "video" to "Средняя",
+                        CsqttConstants.SrtpMode.WRAP to "WRAP-SRTP",
+                        CsqttConstants.SrtpMode.DTLS to "DTLS-SRTP",
+                        CsqttConstants.SrtpMode.AUTO to "Авто",
                     ),
                     enabled = true,
                     indicatorProvider = { mode ->
                         when (mode) {
-                            "audio" -> ModeIndicator(progress = 0.50f, color = Color(0xFFFFB300))
-                            "video" -> ModeIndicator(progress = 0.78f, color = Color(0xFF43A047))
+                            CsqttConstants.SrtpMode.WRAP -> ModeIndicator(progress = 0.5f, color = Color(0xFF43A047))
+                            CsqttConstants.SrtpMode.DTLS -> ModeIndicator(progress = 1.0f, color = Color(0xFF43A047))
+                            CsqttConstants.SrtpMode.AUTO -> ModeIndicator(progress = 1.0f, color = Color(0xFF1475FD))
                             else -> null
                         }
                     },
-                    onTitleInfo = { showObfsGeneralDialog = true },
-                    onInfo = { mode -> showObfsDetailDialog = mode },
-                    onSelected = { mode ->
-                        obfsMode = mode
-                        scope.launch { settingsStore.saveObfsMode(mode) }
-                    },
+                    onTitleInfo = null,
+                    onInfo = null,
+                    onSelected = ::applySrtpMode,
                 )
-
-                Spacer(Modifier.height(4.dp))
 
                 CompactDropdownSetting(
                     title = "Транспорт",
@@ -775,11 +787,11 @@ internal fun SettingsTabContent(
                         when (transport) {
                             CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT -> ModeIndicator(
                                 progress = 1.0f,
-                                color = Color(0xFF43A047),
+                                color = Color(0xFF1475FD),
                             )
                             CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS -> ModeIndicator(
-                                progress = 0.50f,
-                                color = Color(0xFFFFB300),
+                                progress = 0.70f,
+                                color = Color(0xFF43A047),
                             )
                             else -> null
                         }
@@ -794,9 +806,13 @@ internal fun SettingsTabContent(
                     maximum = selectableMaxWorkers,
                     enabled = !tunnelRunning,
                     onValueChange = { value ->
-                        scope.launch { settingsStore.saveWorkersPerHash(value.toInt()) }
+                        val newWorkers = value.toInt()
+                        scope.launch {
+                            settingsStore.saveWorkersPerHash(newWorkers)
+                        }
                     },
                     onInfo = { showWorkersInfoDialog = true },
+                    fixedWorkers = effectiveServerWorkers,
                 )
 
                 AnimatedVisibility(
@@ -938,30 +954,29 @@ internal fun SettingsTabContent(
             }
 
             if (!participantMode) {
-                TunnelAuthorizationButton(
-                    passwordSet = tunnelAuthSettings.connectionPassword.isNotBlank(),
-                    isError = authorizationRequiredError,
+                OutlinedButton(
                     onClick = { showSecretsDialog = true },
-                )
-            }
-
-            if (showObfsGeneralDialog) {
-                ObfsInfoDialog(mode = null, onDismiss = { showObfsGeneralDialog = false })
-            }
-            showObfsDetailDialog?.let { mode ->
-                ObfsInfoDialog(mode = mode, onDismiss = { showObfsDetailDialog = null })
-            }
-            if (showTurnTransportGeneralDialog) {
-                TurnTransportInfoDialog(
-                    mode = null,
-                    onDismiss = { showTurnTransportGeneralDialog = false },
-                )
-            }
-            showTurnTransportDetailDialog?.let { transport ->
-                TurnTransportInfoDialog(
-                    mode = transport,
-                    onDismiss = { showTurnTransportDetailDialog = null },
-                )
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = CsqttShapes.Pill,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    border = BorderStroke(
+                        1.dp,
+                        if (passwordRequiredError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    ),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Key,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = Color.Black,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Авторизация", fontWeight = FontWeight.Bold, maxLines = 1)
+                }
             }
 
             if (showHashModeGeneralDialog) {
@@ -993,6 +1008,15 @@ internal fun SettingsTabContent(
                     },
                 )
             }
+            if (showWorkersInfoDialog) {
+                WorkersInfoDialog(onDismiss = { showWorkersInfoDialog = false })
+            }
+            if (showTurnTransportGeneralDialog) {
+                TurnTransportInfoDialog(mode = null, onDismiss = { showTurnTransportGeneralDialog = false })
+            }
+            showTurnTransportDetailDialog?.let { transport ->
+                TurnTransportInfoDialog(mode = transport, onDismiss = { showTurnTransportDetailDialog = null })
+            }
             if (showTcpTransportRiskDialog) {
                 TcpTransportRiskDialog(
                     onAcknowledge = {
@@ -1008,8 +1032,13 @@ internal fun SettingsTabContent(
                     },
                 )
             }
-            if (showWorkersInfoDialog) {
-                WorkersInfoDialog(onDismiss = { showWorkersInfoDialog = false })
+            if (showSecretsDialog) {
+                SecretsDialog(
+                    settingsStore = settingsStore,
+                    initialPassword = connectionPassword,
+                    onSaved = { showSecretsDialog = false },
+                    onDismiss = { showSecretsDialog = false },
+                )
             }
         }
     }
@@ -1017,49 +1046,34 @@ internal fun SettingsTabContent(
 }
 
 @Composable
-private fun TunnelAuthorizationButton(
-    passwordSet: Boolean,
-    isError: Boolean,
-    onClick: () -> Unit,
-) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
-        shape = CsqttShapes.Pill,
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-        border = BorderStroke(
-            1.dp,
-            if (passwordSet && !isError) {
-                MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-            } else {
-                MaterialTheme.colorScheme.error
-            },
-        ),
-    ) {
-        Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = if (passwordSet) "Авторизация" else "Авторизация нужна",
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-@Composable
 private fun VkHashAuthControls(
     tunnelRunning: Boolean,
     tokenActive: Boolean,
+    tokenFromLink: Boolean,
     isError: Boolean,
     onLogin: () -> Unit,
     onRevokeToken: () -> Unit,
 ) {
-    if (tokenActive) {
+    if (tokenFromLink) {
+        OutlinedButton(
+            onClick = {},
+            enabled = false,
+            modifier = Modifier.height(44.dp),
+            shape = CsqttShapes.Pill,
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = Color.Transparent,
+                disabledContainerColor = Color.Transparent,
+                disabledContentColor = MaterialTheme.colorScheme.primary,
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+            contentPadding = PaddingValues(horizontal = 10.dp),
+        ) {
+            Text("Из ссылки", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        }
+    } else if (tokenActive) {
         OutlinedButton(
             onClick = onRevokeToken,
-            enabled = !tunnelRunning,
+            enabled = true,
             modifier = Modifier.height(44.dp),
             shape = CsqttShapes.Pill,
             colors = ButtonDefaults.outlinedButtonColors(
@@ -1122,18 +1136,16 @@ private fun VkHashModeControls(
     onLogin: () -> Unit,
     onRevokeToken: () -> Unit,
     authorizationRequiredError: Boolean = false,
+    manualAllowed: Boolean = true,
+    tokenFromLink: Boolean = false,
 ) {
     if (!hashSettingsLoaded) return
 
-    AnimatedVisibility(
-        visible = !autoHashMode,
-        enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
-        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top)
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        if (!autoHashMode) {
             OutlinedButton(
                 onClick = onOpenHashes,
                 modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
@@ -1151,53 +1163,108 @@ private fun VkHashModeControls(
                 Icon(Icons.Filled.Phone, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "VK Хеши $filledHashCount/${CsqttConstants.Tunnel.MAX_VK_HASHES}",
+                    "Ссылки VK звонков",
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-
-            if (hashErrorTexts.isNotEmpty()) {
-                Text(
-                    text = hashErrorTexts.joinToString(", "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
+        } else if (tokenFromLink) {
+            OutlinedButton(
+                onClick = {},
+                enabled = false,
+                modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
+                shape = CsqttShapes.Pill,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
+                    disabledContentColor = MaterialTheme.colorScheme.primary,
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+            ) {
+                Icon(Icons.Filled.Link, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Из ссылки", fontWeight = FontWeight.SemiBold)
             }
+        } else if (vkTokenActive) {
+            OutlinedButton(
+                onClick = onRevokeToken,
+                enabled = true,
+                modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
+                shape = CsqttShapes.Pill,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+            ) {
+                Icon(Icons.Filled.CheckCircle, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.width(8.dp))
+                Text("Сессия VK активна", fontWeight = FontWeight.SemiBold)
+            }
+        } else if (authorizationRequiredError) {
+            OutlinedButton(
+                onClick = onLogin,
+                modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
+                shape = CsqttShapes.Pill,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Вход", fontWeight = FontWeight.Bold)
+            }
+        } else {
+            Button(
+                onClick = onLogin,
+                enabled = true,
+                modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
+                shape = CsqttShapes.Pill,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF1475FD),
+                    contentColor = Color.White,
+                ),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Вход", fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        if (!autoHashMode && hashErrorTexts.isNotEmpty()) {
+            Text(
+                text = hashErrorTexts.joinToString(", "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 
     CompactDropdownSetting(
-        title = if (autoHashMode && vkTokenActive) "Хеши" else "Режим хешей",
-        selectedKey = savedHashMode ?: CsqttConstants.VkAutoHash.MODE_MANUAL,
+        title = "Режим хешей",
+        selectedKey = if (!manualAllowed && savedHashMode == CsqttConstants.VkAutoHash.MODE_MANUAL) {
+            CsqttConstants.VkAutoHash.MODE_AUTO_API
+        } else {
+            savedHashMode ?: CsqttConstants.VkAutoHash.MODE_MANUAL
+        },
         options = listOf(
             CsqttConstants.VkAutoHash.MODE_MANUAL to "Ручной",
             CsqttConstants.VkAutoHash.MODE_AUTO_API to "Авто API",
             CsqttConstants.VkAutoHash.MODE_AUTO_JS to "Авто ВК",
-        ),
+        ).filterNot { (mode, _) -> !manualAllowed && mode == CsqttConstants.VkAutoHash.MODE_MANUAL },
         enabled = true,
         indicatorProvider = { mode ->
             when (mode) {
-                CsqttConstants.VkAutoHash.MODE_MANUAL -> ModeIndicator(progress = 0.62f, color = Color(0xFF43A047))
-                CsqttConstants.VkAutoHash.MODE_AUTO_API -> ModeIndicator(progress = 1.0f, color = Color(0xFF43A047))
-                CsqttConstants.VkAutoHash.MODE_AUTO_JS -> ModeIndicator(progress = 1.0f, color = Color(0xFF43A047))
+                CsqttConstants.VkAutoHash.MODE_MANUAL -> ModeIndicator(progress = 0.78f, color = Color(0xFF43A047))
+                CsqttConstants.VkAutoHash.MODE_AUTO_API -> ModeIndicator(progress = 1.0f, color = Color(0xFF1475FD))
+                CsqttConstants.VkAutoHash.MODE_AUTO_JS -> ModeIndicator(progress = 1.0f, color = Color(0xFF1475FD))
                 else -> null
             }
         },
         onTitleInfo = onTitleInfo,
         onInfo = onInfo,
         onSelected = onSelected,
-        leadingContent = if (autoHashMode && hashSettingsLoaded) {
-            {
-                VkHashAuthControls(
-                    tunnelRunning = tunnelRunning,
-                    tokenActive = vkTokenActive,
-                    isError = authorizationRequiredError,
-                    onLogin = onLogin,
-                    onRevokeToken = onRevokeToken,
-                )
-            }
-        } else {
-            null
-        },
+        leadingContent = null,
     )
 }

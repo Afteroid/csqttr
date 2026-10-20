@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 object CsqttConstants {
@@ -34,21 +31,28 @@ object CsqttConstants {
 
         const val DEFAULT_FINGERPRINT = "firefox"
         const val DEFAULT_CLIENT_IDS = "8202606,6287487"
-        const val DEFAULT_OBFS_MODE = "video"
+        const val DEFAULT_OBFS_MODE = "unified"
         const val DEFAULT_TURN_TRANSPORT = "udp"
         const val TURN_TRANSPORT_TCP_TLS = "tcp_tls"
 
-        const val WORKERS_PER_GROUP = 9
-        const val GROUPS_PER_VK_HASH = 3
-        const val MAX_VK_HASHES = 6
-        const val DEFAULT_MAX_WORKERS = 72
-        const val MAX_WORKERS = 126
+        const val WORKERS_PER_GROUP = 10
+        const val GROUPS_PER_VK_HASH = 1
+        const val MAX_VK_HASHES = 7
+        const val DEFAULT_MAX_WORKERS = 100
+        const val MAX_WORKERS = 100
     }
 
     object VkAuth {
         const val MODE_CALLS = "vkcalls"
         const val MODE_CAPTCHA = "legacy"
         const val MODE_AUTO_JS = "auto_js"
+    }
+
+    object SrtpMode {
+        const val WRAP = "wrap-srtp"
+        const val DTLS = "dtls-srtp"
+        const val AUTO = "auto"
+        const val DEFAULT = AUTO
     }
 
     object Timeouts {
@@ -98,6 +102,8 @@ object CsqttConstants {
         const val TUNNEL_CHANNEL_ID = "csqtt_tunnel_v4"
         const val TUNNEL_NOTIFICATION_ID = 1
 
+        const val VPN_CHANNEL_ID = "csqtt_vpn_v1"
+
         const val CAPTCHA_CHANNEL_ID = "captcha_channel"
         const val CAPTCHA_NOTIFICATION_ID = 9001
     }
@@ -146,15 +152,15 @@ object CsqttConstants {
         const val AUTH_MONITOR_INTERVAL_MS = 200L
         const val AUTH_SILENT_RETRY_DELAY_MS = 1_500L
 
-        const val AUTO_CALL_SMALL_DELAY_MS = 80L
-        const val AUTO_CALL_LARGE_DELAY_MS = 202L
+        const val AUTO_CALL_SMALL_DELAY_MS = 380L
+        const val AUTO_CALL_LARGE_DELAY_MS = 380L
         const val AUTO_CALL_MAX_ATTEMPTS = 3
         const val FINISH_CALL_STEP_MS = 150L
         const val FINISH_CALLS_TIMEOUT_MS = 8_000L
     }
 
     object Vpn {
-        const val DEFAULT_MTU = 1300
+        const val DEFAULT_MTU = 1500
         const val EMPTY_WHITELIST_MESSAGE = "В режиме БС выберите хотя бы одно приложение"
     }
 
@@ -172,7 +178,8 @@ object CsqttConstants {
         const val ISSUES = "https://github.com/amurcanov/csqtt/issues/new"
         const val DEVELOPER_PROFILE = "https://github.com/amurcanov"
         const val REPOSITORY = "https://github.com/amurcanov/csqtt"
-        const val DONATE = ""
+        const val TELEGRAM = "https://t.me/amurcanov_telegram"
+        const val TELEGRAM_HANDLE = "t.me/amurcanov_telegram"
     }
 
     object Patterns {

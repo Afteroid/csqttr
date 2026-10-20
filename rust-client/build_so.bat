@@ -1,6 +1,3 @@
-@REM SPDX-FileCopyrightText: 2026 amurcanov
-@REM SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 @echo off
 setlocal enabledelayedexpansion
 
@@ -38,7 +35,6 @@ set "ANDROID_SDK_ROOT=%SDK_PATH%"
 set "ANDROID_NDK_HOME=%NDK_PATH%"
 set "ANDROID_NDK_ROOT=%NDK_PATH%"
 
-:: Reuse CMake and Ninja installed by Android SDK Manager.
 set "CMAKE_BIN="
 if exist "%SDK_PATH%\cmake" (
     for /f "delims=" %%D in ('dir /b /ad /o-n "%SDK_PATH%\cmake" 2^>nul') do (

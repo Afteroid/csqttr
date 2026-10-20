@@ -1,12 +1,11 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import org.json.JSONObject
 
 object TunnelEventParser {
     private const val PREFIX = CsqttConstants.General.CSQTT_EVENT_PREFIX
+    const val CALL_NOT_FOUND_CODE = 951
+    const val MIN_SERVER_WORKERS = 3
 
     sealed class Event {
         data class Started(val message: String = "") : Event()
@@ -42,6 +41,10 @@ object TunnelEventParser {
         ) : Event()
 
         data class Progress(val kind: String) : Event()
+        data class Dtls(val worker: Int, val message: String = "") : Event()
+        data class Routing(val routing: String) : Event()
+        data class Workers(val workers: Int) : Event()
+        data object TunLost : Event()
     }
 
     fun parse(line: String): Event? {
@@ -67,12 +70,16 @@ object TunnelEventParser {
                 worker = payload.optInt("worker", 0).coerceIn(0, CsqttConstants.Tunnel.MAX_WORKERS),
                 message = payload.optString("message", ""),
             )
+            "DTLS" -> Event.Dtls(
+                worker = payload.optInt("worker", 0).coerceIn(0, CsqttConstants.Tunnel.MAX_WORKERS),
+                message = payload.optString("message", ""),
+            )
             "ACTIVE_ZERO" -> Event.ActiveZero(payload.optString("message", ""))
             "CALL_UNAVAILABLE" -> {
                 val hash = payload.optString("hash", "").trim()
                 if (hash.isBlank()) null else Event.CallUnavailable(
                     hash = hash,
-                    code = payload.optInt("code", 951).coerceAtLeast(0),
+                    code = payload.optInt("code", CALL_NOT_FOUND_CODE).coerceAtLeast(0),
                 )
             }
             "NETWORK_SUSPECT" -> Event.NetworkSuspect
@@ -82,6 +89,11 @@ object TunnelEventParser {
                 null
             }
             "CONFIG" -> Event.Config(payload.optString("config", ""))
+            "ROUTING" -> Event.Routing(payload.optString("routing", ""))
+            "TUN_LOST" -> Event.TunLost
+            "WORKERS" -> payload.optInt("workers", -1)
+                .takeIf { it == 0 || it in MIN_SERVER_WORKERS..CsqttConstants.Tunnel.MAX_WORKERS }
+                ?.let { Event.Workers(it) }
             "STATS" -> Event.Stats(
                 active = payload.optInt("active", 0).coerceAtLeast(0),
                 bytesUp = payload.optLong("bytes_up", 0L).coerceAtLeast(0L),

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import org.junit.Assert.assertFalse
@@ -29,5 +26,17 @@ class TunnelAuthSnapshotTest {
 
         assertTrue(snapshot.isLoaded)
         assertEquals(StoredSecretState.Unreadable, snapshot.connectionPasswordState)
+    }
+
+    @Test
+    fun `participant snapshot keeps link and mode in one state`() {
+        val snapshot = TunnelAuthSnapshot(
+            profile = 0,
+            csqttLink = "csqtt://connect?peer=example.test",
+            csqttLinkMode = true,
+        )
+
+        assertTrue(snapshot.csqttLinkMode)
+        assertEquals("csqtt://connect?peer=example.test", snapshot.csqttLink)
     }
 }

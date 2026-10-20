@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import android.content.res.Configuration
@@ -14,13 +11,16 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
@@ -59,6 +59,7 @@ internal fun DeployScreen(
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    var showRegenConfirmDialog by rememberSaveable { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     CsqttScreen(
@@ -193,7 +194,77 @@ internal fun DeployScreen(
                             onInfoClick = { onAction(DeployAction.DockerInfo) },
                             infoContentDescription = "О Docker-установке",
                         )
+                        Text(
+                            text = "Секретный путь и ссылка панели",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (!state.isDeploying) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 10.dp)
+                        ) {
+                            DeployTextField(
+                                value = state.panelDisplayUrl,
+                                onValueChange = {},
+                                placeholder = "https://1.2.3.4:46002/uuid",
+                                enabled = !state.isDeploying,
+                                readOnly = true,
+                                singleLine = false,
+                                minLines = 2,
+                                maxLines = 2,
+                                textColor = if (!state.isDeploying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                                modifier = Modifier.fillMaxWidth(),
+                                trailingContent = {
+                                    IconButton(
+                                        onClick = { showRegenConfirmDialog = true },
+                                        enabled = !state.isDeploying,
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "Перегенерировать UUID",
+                                        )
+                                    }
+                                }
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .padding(end = 52.dp)
+                                    .clickable(enabled = !state.isDeploying) {
+                                        onAction(DeployAction.OpenControlPanel)
+                                    }
+                            )
+                        }
                     }
+                }
+
+                if (showRegenConfirmDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showRegenConfirmDialog = false },
+                        title = { Text("Перегенерация пути") },
+                        text = { Text("После перегенерации старый путь будет утерян, и доступ к панели будет утерян, если вы потеряете новый UUID. Перегенерировать?") },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    showRegenConfirmDialog = false
+                                    onAction(DeployAction.RegenerateSecretPath)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError,
+                                )
+                            ) {
+                                Text("Перегенерировать")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showRegenConfirmDialog = false }) {
+                                Text("Отмена")
+                            }
+                        }
+                    )
                 }
 
                 if (state.isDeploying) {
@@ -296,8 +367,6 @@ private fun DeployProgressCard(
         )
     }
 }
-
-
 
 @Preview(name = "Deploy compact", widthDp = 360, heightDp = 800, showBackground = true)
 @Preview(name = "Deploy dark", widthDp = 720, heightDp = 900, uiMode = Configuration.UI_MODE_NIGHT_YES)

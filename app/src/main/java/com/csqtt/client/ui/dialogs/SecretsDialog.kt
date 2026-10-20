@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui.dialogs
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import com.csqtt.client.ui.appSectionCardBorderColor
+import com.csqtt.client.ui.appSectionCardColor
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -22,6 +22,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.csqtt.client.SettingsStore
 import kotlinx.coroutines.launch
 import com.csqtt.client.ui.design.CsqttShapes
@@ -39,37 +40,57 @@ fun SecretsDialog(
     var passwordInput by rememberSaveable { mutableStateOf(initialPassword) }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Surface(
             shape = CsqttShapes.Dialog,
-            color = MaterialTheme.colorScheme.surface,
+            color = appSectionCardColor(),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 8.dp
+            border = BorderStroke(1.dp, appSectionCardBorderColor()),
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth(0.92f),
         ) {
             Column(
-                modifier = Modifier.padding(24.dp).fillMaxWidth().verticalScroll(rememberScrollState())
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Key,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp),
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Подключение", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "Подключение",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
-                    IconButton(onClick = onDismiss) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Закрыть")
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Закрыть",
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
 
                 val isPasswordValid = passwordInput.isNotEmpty() && passwordInput.matches(Regex("^[a-zA-Z0-9_.!?:#/-]+$"))
 
@@ -93,8 +114,6 @@ fun SecretsDialog(
                     },
                 )
 
-                Spacer(modifier = Modifier.height(20.dp))
-
                 Button(
                     onClick = {
                         scope.launch {
@@ -103,11 +122,12 @@ fun SecretsDialog(
                             onDismiss()
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = CsqttSizes.ControlHeight),
-                    shape = CsqttShapes.Control,
-                    colors = ButtonDefaults.buttonColors(contentColor = MaterialTheme.colorScheme.onPrimary)
+                    modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
+                    shape = CsqttShapes.Pill,
+                    enabled = isPasswordValid,
+                    colors = ButtonDefaults.buttonColors(contentColor = MaterialTheme.colorScheme.onPrimary),
                 ) {
-                    Text("Сохранить", fontWeight = FontWeight.SemiBold)
+                    Text("Сохранить", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

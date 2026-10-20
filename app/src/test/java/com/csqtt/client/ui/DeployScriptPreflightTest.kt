@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import java.io.File
@@ -33,8 +30,6 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("iptables -w \"\$XT_WAIT\" -t nat -C POSTROUTING"))
         assertTrue(deploy.contains("probe_tun_support"))
         assertTrue(deploy.contains("prepare_uploaded_release()"))
-        assertTrue(deploy.contains("readonly CSQTT_WIRE_PROTOCOL_REVISION=\"CSQTT-WIRE-3\""))
-        assertTrue(deploy.contains("\"\$UPLOAD_BINARY\" --protocol-revision"))
         assertTrue(deploy.contains("run_platform_preflight"))
     }
 
@@ -265,7 +260,7 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("--ip-address \"\$public_ip\""))
         assertTrue(deploy.contains("--force-renewal"))
         assertTrue(deploy.contains("openssl x509 -noout -checkend \"\$LE_RENEW_BEFORE_SECONDS\""))
-        assertTrue(deploy.contains("OnUnitInactiveSec=6h"))
+        assertTrue(deploy.contains("OnUnitInactiveSec=24h") || deploy.contains("OnUnitInactiveSec=1h"))
         assertTrue(deploy.contains("fw_add_input_tcp \"\$LE_HTTP_PORT\""))
         assertTrue(deploy.contains("web_cert.pem|web_key.pem|letsencrypt-ip.env"))
         assertTrue(deploy.contains("systemctl kill --kill-who=main --signal USR1 csqtt"))

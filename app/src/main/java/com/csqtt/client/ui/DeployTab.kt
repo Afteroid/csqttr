@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import com.csqtt.client.showRaisedToast
@@ -73,6 +70,8 @@ internal data class DeployUiState(
     val webPanelConfigured: Boolean = false,
     val sshKeysMode: Boolean = false,
     val dockerInstall: Boolean = false,
+    val secretPathEnabled: Boolean = false,
+    val secretPathUuid: String = "",
     val sshKeysFilled: Int = 0,
     val isDeploying: Boolean = false,
     val progress: Float = 0f,
@@ -83,7 +82,7 @@ internal data class DeployUiState(
         get() = !manualPorts || listOf(sshPort, peerPort, webPort).all(::isValidPort)
 
     val authorizationConfigured: Boolean
-        get() = mainPasswordConfigured && webPanelConfigured
+        get() = webPanelConfigured && mainPasswordConfigured
 
     val sshAuthReady: Boolean
         get() = sshLogin.isNotBlank() && if (sshKeysMode) sshKeysFilled == 1 else sshPassword.isNotBlank()
@@ -93,6 +92,18 @@ internal data class DeployUiState(
 
     val canUninstall: Boolean
         get() = host.isNotBlank() && sshAuthReady && portsValid
+
+    val panelDisplayUrl: String
+        get() {
+            val h = host.ifBlank { "IP" }
+            val p = if (manualPorts) (webPort.toIntOrNull() ?: CsqttConstants.Network.DEFAULT_SERVER_WEB_PORT) else CsqttConstants.Network.DEFAULT_SERVER_WEB_PORT
+            val u = if (secretPathUuid.isNotBlank()) {
+                if (secretPathUuid.startsWith("/")) secretPathUuid else "/$secretPathUuid"
+            } else {
+                "/uuid"
+            }
+            return "https://$h:$p$u"
+        }
 }
 
 internal sealed interface DeployAction {
@@ -102,6 +113,7 @@ internal sealed interface DeployAction {
     data class ManualPortsChanged(val enabled: Boolean) : DeployAction
     data class SshKeysModeChanged(val enabled: Boolean) : DeployAction
     data class DockerInstallChanged(val enabled: Boolean) : DeployAction
+    data object RegenerateSecretPath : DeployAction
     data object EditSshKeys : DeployAction
     data object DockerInfo : DeployAction
     data class SshPortChanged(val value: String) : DeployAction
@@ -116,6 +128,11 @@ internal sealed interface DeployAction {
 
 internal fun passwordToSynchronizeAfterDeploy(deploySucceeded: Boolean, mainPassword: String): String? =
     mainPassword.takeIf { deploySucceeded && it.isNotBlank() }
+
+private val DEPLOY_MAIN_PASSWORD_REGEX = Regex("^[a-zA-Z0-9]{16}$")
+
+internal fun isDeployMainPasswordValid(password: String): Boolean =
+    password.length == 16 && password.matches(DEPLOY_MAIN_PASSWORD_REGEX)
 
 internal fun isValidPort(value: String): Boolean = value.toIntOrNull() in 1..65535
 
@@ -186,6 +203,8 @@ internal fun DeployTab(
     val savedSshCertificate = savedSettings.sshCertificate
     val savedServerPeerPort = savedSettings.serverPeerPort
     val savedServerWebPort = savedSettings.serverWebPort
+    val savedSecretPathEnabled = savedSettings.secretPathEnabled
+    val savedSecretPathUuid = savedSettings.secretPathUuid
     val isDeploying by DeployManager.isDeploying.collectAsStateWithLifecycle()
     val deployProgress by DeployManager.deployProgress.collectAsStateWithLifecycle()
     val currentStep by DeployManager.currentStep.collectAsStateWithLifecycle()
@@ -199,6 +218,7 @@ internal fun DeployTab(
     var peerPort by rememberSaveable(savedSettings.profile) { mutableStateOf(savedServerPeerPort.toString()) }
     var webPort by rememberSaveable(savedSettings.profile) { mutableStateOf(savedServerWebPort.toString()) }
     var dockerInstall by rememberSaveable(savedSettings.profile) { mutableStateOf(savedDockerInstall) }
+    var secretPathEnabled by rememberSaveable(savedSettings.profile) { mutableStateOf(savedSecretPathEnabled) }
     var generalEdited by rememberSaveable(savedSettings.profile) { mutableStateOf(false) }
     var credentialsEdited by rememberSaveable(savedSettings.profile) { mutableStateOf(false) }
     var portsEdited by rememberSaveable(savedSettings.profile) { mutableStateOf(false) }
@@ -230,6 +250,11 @@ internal fun DeployTab(
     LaunchedEffect(savedSettings.profile, savedDockerInstall) {
         dockerInstall = savedDockerInstall
     }
+    LaunchedEffect(savedSettings.profile, savedSecretPathUuid) {
+        if (savedSecretPathUuid.isBlank()) {
+            settingsStore.regenerateDeploySecretPathUuid()
+        }
+    }
 
     LaunchedEffect(savedSettings.profile, host, generalEdited) {
         if (!generalEdited) return@LaunchedEffect
@@ -260,10 +285,12 @@ internal fun DeployTab(
         sshPort = sshPort,
         peerPort = peerPort,
         webPort = webPort,
-        mainPasswordConfigured = savedMainPass.isNotBlank(),
+        mainPasswordConfigured = isDeployMainPasswordValid(savedMainPass),
         webPanelConfigured = hasWebPanelCredentials(savedWebLogin, savedWebPassword),
         sshKeysMode = savedSshKeysMode,
         dockerInstall = dockerInstall,
+        secretPathEnabled = secretPathEnabled,
+        secretPathUuid = savedSecretPathUuid,
         sshKeysFilled = if (savedSshPrivateKey.isNotBlank()) 1 else 0,
         isDeploying = isDeploying,
         progress = deployProgress,
@@ -273,6 +300,7 @@ internal fun DeployTab(
 
     fun startDeploy() {
         if (DeployManager.isDeploying.value) return
+        if (!state.canInstall || !isDeployMainPasswordValid(savedMainPass)) return
         val ports = resolveServerPorts(savedManualPorts, sshPort, peerPort, webPort)
         val effectiveSshPort = ports.ssh
         val effectivePeerPort = ports.peer
@@ -281,9 +309,10 @@ internal fun DeployTab(
         val deployKeyPassphrase = if (savedSshKeysMode) savedSshKeyPassphrase else ""
         val deployCertificate = if (savedSshKeysMode) savedSshCertificate else ""
         val deployPassword = if (savedSshKeysMode) "" else sshPassword
+        val effectiveMainPass = savedMainPass
         scope.launch {
             settingsStore.saveDeploy(host)
-            settingsStore.saveDeploySecrets(savedMainPass, sshLogin, sshPassword, savedWebLogin, savedWebPassword)
+            settingsStore.saveDeploySecrets(effectiveMainPass, sshLogin, sshPassword, savedWebLogin, savedWebPassword)
             settingsStore.savePorts(effectivePeerPort, effectiveWebPort, effectiveSshPort.toString())
         }
         DeployManager.startDeploy()
@@ -296,7 +325,7 @@ internal fun DeployTab(
                     user = sshLogin,
                     pass = deployPassword,
                     port = effectiveSshPort,
-                    mainPass = savedMainPass,
+                    mainPass = effectiveMainPass,
                     webLogin = savedWebLogin,
                     webPass = savedWebPassword,
                     peerPort = effectivePeerPort,
@@ -306,9 +335,10 @@ internal fun DeployTab(
                     keyPassphrase = deployKeyPassphrase,
                     certificate = deployCertificate,
                     installInDocker = dockerInstall,
+                    secretPath = savedSecretPathUuid.ifBlank { "" },
                 )
                 if (success) {
-                    passwordToSynchronizeAfterDeploy(success, savedMainPass)?.let { mainPassword ->
+                    passwordToSynchronizeAfterDeploy(success, effectiveMainPass)?.let { mainPassword ->
                         settingsStore.saveConnectionPassword(mainPassword)
                         TunnelManager.addDeployInfoLog("Пароль подключения синхронизирован с паролем сервера")
                     }
@@ -421,6 +451,10 @@ internal fun DeployTab(
                     dockerInstall = action.enabled
                     scope.launch { settingsStore.saveDockerInstall(action.enabled) }
                 }
+                DeployAction.RegenerateSecretPath -> scope.launch {
+                    val newUuid = settingsStore.regenerateDeploySecretPathUuid()
+                    showDeployToast(context, "Секретный путь перегенерирован")
+                }
                 DeployAction.EditSshKeys -> showSshKeysDialog = true
                 DeployAction.DockerInfo -> showDockerInfoDialog = true
                 is DeployAction.SshPortChanged -> {
@@ -438,7 +472,21 @@ internal fun DeployTab(
                 DeployAction.EditAuthorization -> showSecretsDialog = true
                 DeployAction.Install -> {
                     showValidation = true
-                    if (state.canInstall) startDeploy()
+                    if (state.canInstall) {
+                        startDeploy()
+                    } else {
+                        if (!state.mainPasswordConfigured) {
+                            scope.launch { snackbarHostState.showSnackbar("Пароль туннеля должен содержать ровно 16 символов [0-9A-Za-z]") }
+                        } else if (!state.webPanelConfigured) {
+                            scope.launch { snackbarHostState.showSnackbar("Укажите логин и пароль web-панели в разделе «Авторизация»") }
+                        } else if (!state.sshAuthReady) {
+                            scope.launch { snackbarHostState.showSnackbar("Укажите данные SSH для подключения к серверу") }
+                        } else if (state.host.isBlank()) {
+                            scope.launch { snackbarHostState.showSnackbar("Укажите IP сервера или домен") }
+                        } else if (!state.portsValid) {
+                            scope.launch { snackbarHostState.showSnackbar("Проверьте правильность портов") }
+                        }
+                    }
                 }
                 DeployAction.Uninstall -> if (state.canUninstall) showUninstallDialog = true
                 DeployAction.PanelInfo -> showPanelInfoDialog = true
@@ -452,9 +500,14 @@ internal fun DeployTab(
                             peerPort,
                             webPort,
                         ).web
+                        val path = if (savedSettings.secretPathUuid.isNotBlank()) {
+                            "/${savedSettings.secretPathUuid.trimStart('/')}"
+                        } else {
+                            ""
+                        }
                         runCatching {
                             context.startActivity(
-                                Intent(Intent.ACTION_VIEW, "https://$host:$effectiveWebPort".toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                Intent(Intent.ACTION_VIEW, "https://$host:$effectiveWebPort$path".toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             )
                         }.onFailure {
                             scope.launch { snackbarHostState.showSnackbar("Не удалось открыть панель управления") }

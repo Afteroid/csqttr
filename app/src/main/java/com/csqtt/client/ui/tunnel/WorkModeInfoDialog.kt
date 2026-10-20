@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +22,7 @@ import androidx.compose.ui.window.DialogProperties
 
 import com.csqtt.client.CsqttConstants
 import com.csqtt.client.ui.design.CsqttShapes
+import com.csqtt.client.ui.design.CsqttSizes
 
 @Composable
 internal fun WorkModeInfoDialog(mode: String? = null, onDismiss: () -> Unit) {
@@ -36,11 +35,11 @@ internal fun WorkModeInfoDialog(mode: String? = null, onDismiss: () -> Unit) {
         CsqttConstants.VkAuth.MODE_CALLS -> "Режим «Авто»" to """
             • Получение TURN-сессий напрямую через протокол и гостевую цепочку VK Calls.
             • Обычно позволяет работать без капчи.
-            • Поддерживает масштабирование до 126 независимых воркеров.
+            • Поддерживает масштабирование до 100 независимых воркеров.
         """.trimIndent()
         CsqttConstants.VkAuth.MODE_AUTO_JS -> "Режим «Авто ВК»" to """
             • Один аккаунт создаёт и удерживает один звонок через метод vchat.startConversation.
-            • До 7 независимых Calls-сессий обслуживают до 18 потоков каждая (общий максимум — 126).
+            • Calls-сессии обслуживают группы потоков с общим максимумом 100 воркеров.
             • Получает credentials через официальный метод get_conversation_params под авторизованным аккаунтом VK.
             • Анонимные звонки не используются. Режим хешей автоматически фиксируется на «Авто ВК».
             • Создатель удерживает звонок до отключения туннеля.
@@ -49,7 +48,7 @@ internal fun WorkModeInfoDialog(mode: String? = null, onDismiss: () -> Unit) {
         else -> "Режимы работы" to """
             • Капча — считается первым и самым старым методом получения credentials, не советуется к штатному использованию.
 
-            • Авто — уже очень хороший гостевой режим через VK Calls, почти всегда не требует капчи и работает без проблем (до 126 потоков).
+            • Авто — уже очень хороший гостевой режим через VK Calls, почти всегда не требует капчи и работает без проблем (до 100 потоков).
 
             • Авто ВК — новый режим получения credentials через get_conversation_params. Использует залогиненный аккаунт ВК, анонимные звонки не используются. Советуем использовать этот режим, когда с режимом «Авто» наблюдаются проблемы. Режим самый стабильный, работает только в паре с Авто ВК методом получения ВК хешей.
         """.trimIndent()
@@ -61,30 +60,30 @@ internal fun WorkModeInfoDialog(mode: String? = null, onDismiss: () -> Unit) {
     ) {
         Surface(
             shape = CsqttShapes.Dialog,
-            color = MaterialTheme.colorScheme.surface,
+            color = appSectionCardColor(),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 6.dp,
-            modifier = Modifier.fillMaxWidth(0.9f),
+            border = BorderStroke(1.dp, appSectionCardBorderColor()),
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth(0.92f),
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
                     text = text,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 20.sp,
+                    lineHeight = 16.sp,
                 )
-                Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
                     shape = CsqttShapes.Pill,
                     colors = ButtonDefaults.buttonColors(contentColor = MaterialTheme.colorScheme.onPrimary),
                 ) {
-                    Text("Понятно", fontWeight = FontWeight.SemiBold)
+                    Text("Понятно", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: 2026 amurcanov
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 $ErrorActionPreference = "Stop"
 Push-Location $PSScriptRoot
 try {

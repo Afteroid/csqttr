@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import androidx.compose.foundation.BorderStroke
@@ -22,7 +19,7 @@ import com.csqtt.client.ui.design.CsqttShapes
 import com.csqtt.client.ui.design.CsqttSpacing
 
 @Composable
-private fun appSectionCardColor(): Color {
+fun appSectionCardColor(): Color {
     val colors = MaterialTheme.colorScheme
     val isDark = colors.background.luminance() < 0.22f
     return if (isDark) {
@@ -33,7 +30,7 @@ private fun appSectionCardColor(): Color {
 }
 
 @Composable
-private fun appSectionCardBorderColor(): Color {
+fun appSectionCardBorderColor(): Color {
     val colors = MaterialTheme.colorScheme
     val isDark = colors.background.luminance() < 0.22f
     return if (isDark) {

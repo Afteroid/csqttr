@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import androidx.compose.foundation.Canvas
@@ -46,6 +43,9 @@ import kotlin.math.roundToInt
 
 import androidx.compose.runtime.rememberUpdatedState
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.Color
+
 @Composable
 internal fun TunnelWorkersControl(
     value: Float,
@@ -53,10 +53,17 @@ internal fun TunnelWorkersControl(
     enabled: Boolean,
     onValueChange: (Float) -> Unit,
     onInfo: () -> Unit,
+    fixedWorkers: Int? = null,
 ) {
-    val minimum = CsqttConstants.Tunnel.WORKERS_PER_GROUP.toFloat()
+    val isFixed = fixedWorkers != null && fixedWorkers in 3..100
+    val minimum = 5f
     val normalizedMaximum = roundToGroup(maximum, maximum)
     val normalizedValue = roundToGroup(value.coerceIn(minimum, normalizedMaximum), normalizedMaximum)
+    var localValue by remember(normalizedValue, normalizedMaximum) {
+        mutableStateOf(normalizedValue.coerceIn(minimum, normalizedMaximum))
+    }
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -65,7 +72,7 @@ internal fun TunnelWorkersControl(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "Потоки",
+                    text = if (isFixed) "Потоки (лимит сервера):" else "Потоки",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                 )
@@ -79,20 +86,35 @@ internal fun TunnelWorkersControl(
                 }
             }
             Text(
-                text = normalizedValue.toInt().toString(),
+                text = if (isFixed) fixedWorkers.toString() else localValue.toInt().toString(),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = Color(0xFF2563EB),
             )
         }
-        CompactSteppedSlider(
-            value = normalizedValue,
-            onValueChange = onValueChange,
-            valueRange = minimum..normalizedMaximum,
-            stepSize = CsqttConstants.Tunnel.WORKERS_PER_GROUP.toFloat(),
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (!isFixed) {
+            CompactSteppedSlider(
+                value = localValue,
+                onValueChange = { localValue = it },
+                onValueChangeFinished = {
+                    val finalValue = localValue.coerceIn(minimum, normalizedMaximum)
+                    currentOnValueChange(finalValue)
+                },
+                valueRange = minimum..normalizedMaximum,
+                stepSize = CsqttConstants.Tunnel.WORKERS_PER_GROUP.toFloat(),
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            CompactSteppedSlider(
+                value = fixedWorkers.toFloat(),
+                onValueChange = {},
+                valueRange = 3f..maximum.coerceAtLeast(fixedWorkers.toFloat()),
+                stepSize = 1f,
+                enabled = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 
@@ -100,13 +122,14 @@ internal fun TunnelWorkersControl(
 internal fun CompactSteppedSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: (() -> Unit)? = null,
     valueRange: ClosedFloatingPointRange<Float>,
     stepSize: Float,
     enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val activeColor = MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 1f else 0.38f)
-    val inactiveColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 1f else 0.55f)
+    val activeColor = MaterialTheme.colorScheme.primary
+    val inactiveColor = MaterialTheme.colorScheme.surfaceVariant
     val thumbStrokeColor = MaterialTheme.colorScheme.surface
     val focusedThumbStrokeColor = MaterialTheme.colorScheme.primary
     val density = LocalDensity.current
@@ -114,16 +137,21 @@ internal fun CompactSteppedSlider(
     val trackWidthPx = with(density) { 5.dp.toPx() }
 
     val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnValueChangeFinished by rememberUpdatedState(onValueChangeFinished)
     val currentValue by rememberUpdatedState(value)
     val currentValueRange by rememberUpdatedState(valueRange)
     val currentStepSize by rememberUpdatedState(stepSize)
     var focused by remember { mutableStateOf(false) }
 
     fun snap(raw: Float): Float {
-        val min = currentValueRange.start
-        val max = currentValueRange.endInclusive
-        val snapped = (((raw - min) / currentStepSize).roundToInt() * currentStepSize) + min
-        return snapped.coerceIn(min, max)
+        return roundToGroup(raw, currentValueRange.endInclusive)
+    }
+
+    fun stepNeighbor(current: Float, forward: Boolean): Float {
+        val allowed = WORKER_STEPS.filter { it in currentValueRange }
+        val idx = allowed.indexOf(current).let { if (it >= 0) it else allowed.indexOf(roundToGroup(current, currentValueRange.endInclusive)) }
+        val targetIdx = if (forward) (idx + 1).coerceAtMost(allowed.size - 1) else (idx - 1).coerceAtLeast(0)
+        return allowed.getOrElse(targetIdx) { current }
     }
 
     fun positionToValue(x: Float, width: Float): Float {
@@ -139,14 +167,17 @@ internal fun CompactSteppedSlider(
             .onFocusChanged { focused = it.isFocused }
             .onPreviewKeyEvent { event ->
                 if (!enabled || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                val step = currentStepSize
                 when (event.key) {
                     Key.DirectionLeft, Key.DirectionDown -> {
-                        currentOnValueChange(snap(currentValue - step))
+                        val next = stepNeighbor(currentValue, false)
+                        currentOnValueChange(next)
+                        currentOnValueChangeFinished?.invoke()
                         true
                     }
                     Key.DirectionRight, Key.DirectionUp -> {
-                        currentOnValueChange(snap(currentValue + step))
+                        val next = stepNeighbor(currentValue, true)
+                        currentOnValueChange(next)
+                        currentOnValueChangeFinished?.invoke()
                         true
                     }
                     else -> false
@@ -169,6 +200,12 @@ internal fun CompactSteppedSlider(
                     onDrag = { change, _ ->
                         change.consume()
                         currentOnValueChange(positionToValue(change.position.x, size.width.toFloat()))
+                    },
+                    onDragEnd = {
+                        currentOnValueChangeFinished?.invoke()
+                    },
+                    onDragCancel = {
+                        currentOnValueChangeFinished?.invoke()
                     }
                 )
             }
@@ -176,6 +213,7 @@ internal fun CompactSteppedSlider(
                 if (!enabled) return@pointerInput
                 detectTapGestures { offset ->
                     currentOnValueChange(positionToValue(offset.x, size.width.toFloat()))
+                    currentOnValueChangeFinished?.invoke()
                 }
             },
     ) {
@@ -210,9 +248,10 @@ internal fun CompactSteppedSlider(
     }
 }
 
-internal fun roundToGroup(value: Float, maxW: Float = 96f): Float {
-    val groupSize = CsqttConstants.Tunnel.WORKERS_PER_GROUP
-    val normalizedMax = ((maxW.toInt().coerceAtLeast(groupSize)) / groupSize * groupSize).toFloat()
-    val rounded = (Math.round(value / groupSize) * groupSize).toFloat()
-    return rounded.coerceIn(groupSize.toFloat(), normalizedMax)
+internal val WORKER_STEPS = floatArrayOf(5f, 10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f, 90f, 100f)
+
+internal fun roundToGroup(value: Float, maxW: Float = 100f): Float {
+    val allowed = WORKER_STEPS.filter { it <= maxW }
+    if (allowed.isEmpty()) return 5f
+    return allowed.minByOrNull { kotlin.math.abs(it - value) } ?: allowed.first()
 }

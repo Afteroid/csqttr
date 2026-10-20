@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui.dialogs
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import com.csqtt.client.ui.appSectionCardBorderColor
+import com.csqtt.client.ui.appSectionCardColor
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
@@ -16,29 +16,43 @@ import androidx.compose.ui.window.Dialog
 import com.csqtt.client.ui.design.CsqttShapes
 import com.csqtt.client.ui.design.CsqttSizes
 
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UninstallConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
     var confirmText by remember { mutableStateOf("") }
     val isConfirmed = confirmText.trim().lowercase() == "да"
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
+            modifier = Modifier.fillMaxWidth(0.92f),
             shape = CsqttShapes.Dialog,
-            color = MaterialTheme.colorScheme.surface,
+            color = appSectionCardColor(),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 8.dp
+            border = BorderStroke(1.dp, appSectionCardBorderColor()),
+            tonalElevation = 0.dp
         ) {
-            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text(
                     "Удаление CSQTT с сервера",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.error
                 )
                 Text(
                     "Будут удалены: бинарник, systemd-сервис, бот, конфигурация CSQTT и только помеченные правила firewall/NAT для CSQTT.\n\nЭто действие необратимо.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
+                    lineHeight = 15.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(
@@ -47,11 +61,13 @@ fun UninstallConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
                     label = {
                         Text(
                             "Введите «да» для подтверждения",
+                            style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
                         )
                     },
+                    textStyle = MaterialTheme.typography.bodyMedium,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = CsqttShapes.Control,
@@ -60,15 +76,27 @@ fun UninstallConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                     )
                 )
-                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     OutlinedButton(
-                        onClick = onDismiss, modifier = Modifier.fillMaxWidth().heightIn(min = CsqttSizes.ControlHeight),
-                        shape = CsqttShapes.Control,
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(CsqttSizes.ControlHeight),
+                        shape = CsqttShapes.Pill,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
-                    ) { Text("Отмена") }
+                    ) {
+                        Text("Отмена", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    }
                     Button(
-                        onClick = onConfirm, modifier = Modifier.fillMaxWidth().heightIn(min = CsqttSizes.ControlHeight),
-                        shape = CsqttShapes.Control, enabled = isConfirmed,
+                        onClick = onConfirm,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(CsqttSizes.ControlHeight),
+                        shape = CsqttShapes.Pill,
+                        enabled = isConfirmed,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.error,
                             contentColor = MaterialTheme.colorScheme.onError
@@ -76,7 +104,7 @@ fun UninstallConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
                     ) {
                         Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Удалить", fontWeight = FontWeight.Bold)
+                        Text("Удалить", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

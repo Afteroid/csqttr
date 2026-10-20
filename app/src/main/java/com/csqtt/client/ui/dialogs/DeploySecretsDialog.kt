@@ -1,16 +1,37 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui.dialogs
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -19,14 +40,17 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.csqtt.client.SettingsStore
-import kotlinx.coroutines.launch
-import androidx.compose.foundation.text.KeyboardOptions
+import com.csqtt.client.ui.appSectionCardBorderColor
+import com.csqtt.client.ui.appSectionCardColor
 import com.csqtt.client.ui.design.CsqttShapes
 import com.csqtt.client.ui.design.CsqttSizes
+import com.csqtt.client.ui.utils.generate16CharPassword
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DeploySecretsDialog(
     settingsStore: SettingsStore,
@@ -39,75 +63,119 @@ fun DeploySecretsDialog(
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    var passInput by rememberSaveable { mutableStateOf(initialMainPass) }
+    var mainPassInput by rememberSaveable {
+        mutableStateOf(initialMainPass.ifBlank { generate16CharPassword() })
+    }
     var webLoginInput by rememberSaveable { mutableStateOf(initialWebLogin) }
     var webPassInput by rememberSaveable { mutableStateOf(initialWebPass) }
     var passwordsVisible by rememberSaveable { mutableStateOf(false) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Surface(
             shape = CsqttShapes.Dialog,
-            color = MaterialTheme.colorScheme.surface,
+            color = appSectionCardColor(),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 8.dp
+            border = BorderStroke(1.dp, appSectionCardBorderColor()),
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth(0.92f),
         ) {
-            Column(modifier = Modifier.padding(24.dp).fillMaxWidth().verticalScroll(rememberScrollState())) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Авторизация", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Закрыть")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(
+                            text = "Авторизация",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Закрыть",
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
-
                 Text(
-                    text = "Придумайте свои данные — латиница и цифры. Они будут созданы на сервере при установке, искать ничего не нужно.",
+                    text = "Придумайте логин и пароль для web панели и пароль туннеля — латиница и цифры.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 15.sp,
                 )
-                Spacer(Modifier.height(16.dp))
 
                 val allowedChars = Regex("^[a-zA-Z0-9]+$")
+                val is16AlphaNum = Regex("^[a-zA-Z0-9]{16}$")
                 val invalidHint: @Composable () -> Unit = {
                     Text("Разрешена «Латиница» и «Цифры»", color = MaterialTheme.colorScheme.error)
                 }
-                val isPasswordValid = passInput.isNotEmpty() && passInput.matches(allowedChars)
                 val isWebLoginValid = webLoginInput.isNotEmpty() && webLoginInput.matches(allowedChars)
                 val isWebPassValid = webPassInput.isNotEmpty() && webPassInput.matches(allowedChars)
+                val isMainPassValid = mainPassInput.length == 16 && mainPassInput.matches(is16AlphaNum)
 
-                Text("Подключение", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Пароль подключения к туннелю",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+
                 OutlinedTextField(
-                    value = passInput,
+                    value = mainPassInput,
                     onValueChange = { 
-                        passInput = it.filter { c -> !c.isWhitespace() }
+                        mainPassInput = it.filter { c -> !c.isWhitespace() }.take(16)
                     },
-                    label = { Text("Пароль туннеля (придумайте)", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-                    placeholder = { Text("придумайте пароль", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
+                    label = { Text("Пароль туннеля (16 символов)", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
+                    placeholder = { Text("16 символов", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = CsqttShapes.Control,
-                    isError = !isPasswordValid,
-                    supportingText = if (passInput.isNotEmpty() && !isPasswordValid) invalidHint else null,
-                    visualTransformation = if (passwordsVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    isError = !isMainPassValid,
+                    supportingText = if (mainPassInput.isNotEmpty() && !isMainPassValid) {
+                        { Text("Требуется ровно 16 символов [0-9A-Za-z]", color = MaterialTheme.colorScheme.error) }
+                    } else null,
                     trailingIcon = {
-                        TextButton(onClick = { passwordsVisible = !passwordsVisible }) {
-                            Text(if (passwordsVisible) "Скрыть" else "Показать")
+                        IconButton(onClick = { mainPassInput = generate16CharPassword() }) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Сгенерировать пароль (16 символов)",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
                         }
                     },
                 )
 
-                Spacer(Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(8.dp))
-                Text("Данные доступа к web панели", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Данные доступа к web панели",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
 
                 OutlinedTextField(
                     value = webLoginInput,
@@ -120,10 +188,8 @@ fun DeploySecretsDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = CsqttShapes.Control,
                     isError = !isWebLoginValid,
-                    supportingText = if (webLoginInput.isNotEmpty() && !isWebLoginValid) invalidHint else null
+                    supportingText = if (webLoginInput.isNotEmpty() && !isWebLoginValid) invalidHint else null,
                 )
-
-                Spacer(Modifier.height(8.dp))
 
                 OutlinedTextField(
                     value = webPassInput,
@@ -141,22 +207,21 @@ fun DeploySecretsDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 )
 
-                Spacer(Modifier.height(20.dp))
-
                 Button(
                     onClick = {
                         scope.launch {
-                            settingsStore.saveDeploySecrets(passInput, initialSshLogin, initialSshPass, webLoginInput, webPassInput)
+                            settingsStore.saveDeploySecrets(mainPassInput, initialSshLogin, initialSshPass, webLoginInput, webPassInput)
+                            settingsStore.saveConnectionPassword(mainPassInput)
                             onSaved()
                             onDismiss()
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = CsqttSizes.ControlHeight),
-                    shape = CsqttShapes.Control,
-                    enabled = isPasswordValid && isWebLoginValid && isWebPassValid,
-                    colors = ButtonDefaults.buttonColors(contentColor = MaterialTheme.colorScheme.onPrimary)
+                    modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
+                    shape = CsqttShapes.Pill,
+                    enabled = isWebLoginValid && isWebPassValid && isMainPassValid,
+                    colors = ButtonDefaults.buttonColors(contentColor = MaterialTheme.colorScheme.onPrimary),
                 ) {
-                    Text("Сохранить", fontWeight = FontWeight.SemiBold)
+                    Text("Сохранить", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

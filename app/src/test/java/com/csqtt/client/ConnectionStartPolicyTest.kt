@@ -6,6 +6,51 @@ import org.junit.Test
 
 class ConnectionStartPolicyTest {
     @Test
+    fun tokenFromParticipantLinkIsReadyWithoutStoredOwnerToken() {
+        assertEquals(
+            true,
+            ConnectionStartPolicy.hasReadyVkCredentials(
+                linkMode = true,
+                linkHashCount = 0,
+                linkTokenPresent = true,
+                autoHashMode = true,
+                storedTokenPresent = false,
+                manualHashCount = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun participantLinkUsesExplicitlyEnteredHashesWhenLinkHasNoVkCredentials() {
+        assertEquals(
+            true,
+            ConnectionStartPolicy.hasReadyVkCredentials(
+                linkMode = true,
+                linkHashCount = 0,
+                linkTokenPresent = false,
+                autoHashMode = false,
+                storedTokenPresent = false,
+                manualHashCount = 1,
+            ),
+        )
+    }
+
+    @Test
+    fun participantLinkWithoutCredentialsIsBlockedUntilUserEntersThem() {
+        assertEquals(
+            false,
+            ConnectionStartPolicy.hasReadyVkCredentials(
+                linkMode = true,
+                linkHashCount = 0,
+                linkTokenPresent = false,
+                autoHashMode = false,
+                storedTokenPresent = false,
+                manualHashCount = 0,
+            ),
+        )
+    }
+
+    @Test
     fun `participant may connect through a valid link with manually saved hashes`() {
         assertNull(
             ConnectionStartPolicy.blocker(
@@ -47,8 +92,7 @@ class ConnectionStartPolicyTest {
                 hashesReady = true,
             ),
         )
-        assertEquals(
-            ConnectionStartBlocker.Password,
+        assertNull(
             ConnectionStartPolicy.blocker(
                 linkMode = false,
                 linkValid = false,
@@ -61,9 +105,8 @@ class ConnectionStartPolicyTest {
     }
 
     @Test
-    fun `unreadable stored secret is reported before an empty password`() {
-        assertEquals(
-            ConnectionStartBlocker.StoredSecret,
+    fun `unreadable stored secret does not block passwordless connection`() {
+        assertNull(
             ConnectionStartPolicy.blocker(
                 linkMode = false,
                 linkValid = false,

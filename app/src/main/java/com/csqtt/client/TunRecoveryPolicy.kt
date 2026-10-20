@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 internal object TunRecoveryPolicy {
@@ -20,4 +17,13 @@ internal object TunRecoveryPolicy {
             !forceRebuild &&
             activeClientIp == requestedClientIp &&
             activeDns == requestedDns
+
+    fun shouldRestoreInterface(
+        permissionGranted: Boolean,
+        stopRequested: Boolean,
+        serviceDestroyed: Boolean,
+        activeClientIp: String?,
+        activeDns: String?,
+    ): Boolean = false
 }
+

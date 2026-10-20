@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import androidx.compose.animation.AnimatedVisibility
@@ -63,8 +60,8 @@ import androidx.compose.material.icons.filled.Favorite
 @Composable
 internal fun InfoHeroCard(
     currentVersion: String,
-    onSupportClick: () -> Unit,
     onCryptoClick: () -> Unit,
+    onTelegramClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
 
@@ -95,21 +92,32 @@ internal fun InfoHeroCard(
             )
 
             Button(
-                onClick = onSupportClick,
+                onClick = onTelegramClick,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 shape = CsqttShapes.Pill,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = CSQTTColors.donate,
+                    containerColor = CSQTTColors.telegram,
                     contentColor = Color.White,
                 ),
                 contentPadding = PaddingValues(horizontal = 16.dp)
             ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_yoomoney),
-                    contentDescription = "ЮMoney",
-                    tint = Color.Unspecified,
-                    modifier = Modifier.height(26.dp)
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_telegram),
+                        contentDescription = "Telegram",
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "t.me/amurcanov_telegram",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color.White
+                    )
+                }
             }
 
             Button(

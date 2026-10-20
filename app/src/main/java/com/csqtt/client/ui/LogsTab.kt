@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import com.csqtt.client.showRaisedToast
@@ -80,9 +77,6 @@ fun LogsTab(settingsStore: SettingsStore) {
             )
         }
 
-        // The terminal panel is the only place reading TunnelManager.logs, so a
-        // log flush (~120ms under traffic) recomposes this panel alone instead
-        // of the whole tab.
         Surface(
             modifier = Modifier
                 .fillMaxWidth()

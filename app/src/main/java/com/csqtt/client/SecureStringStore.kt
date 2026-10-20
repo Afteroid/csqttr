@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import android.content.Context
@@ -28,8 +25,6 @@ class SecureStringStore(context: Context) {
         KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
     }
 
-    // Keystore crypto costs an IPC round-trip; DataStore re-emits the whole
-    // preferences object on every edit, so unchanged ciphertexts are memoized.
     private val decryptCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     fun encrypt(value: String): String {

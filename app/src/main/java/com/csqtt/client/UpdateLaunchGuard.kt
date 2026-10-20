@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import android.content.Context
@@ -9,7 +6,6 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.edit
 
-/** Drops only stale Activity/Compose state on the first launch after package replace. */
 internal object UpdateLaunchGuard {
     private const val TAG = "CSQTT"
     private const val PREFS = "update_launch_guard"

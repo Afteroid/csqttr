@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import androidx.compose.foundation.BorderStroke
@@ -54,23 +51,21 @@ internal fun ServerActionBar(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedButton(
-                onClick = { onAction(DeployAction.EditAuthorization) },
+            Button(
+                onClick = { onAction(DeployAction.Uninstall) },
+                enabled = !state.isDeploying && state.canUninstall,
                 modifier = Modifier.weight(1f).height(52.dp),
                 shape = CsqttShapes.Pill,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color.Transparent,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-                border = BorderStroke(
-                    1.dp,
-                    if (state.authorizationConfigured) MaterialTheme.colorScheme.outline.copy(alpha = 0.4f) else MaterialTheme.colorScheme.error,
-                ),
                 contentPadding = PaddingValues(horizontal = 8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp)
             ) {
-                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Авторизация", fontWeight = FontWeight.Bold, maxLines = 1)
+                Text("Удалить", fontWeight = FontWeight.Bold, maxLines = 1)
             }
 
             Button(
@@ -100,58 +95,23 @@ internal fun ServerActionBar(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        OutlinedButton(
+            onClick = { onAction(DeployAction.EditAuthorization) },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = CsqttShapes.Pill,
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+            border = BorderStroke(
+                1.dp,
+                if (state.authorizationConfigured) MaterialTheme.colorScheme.outline.copy(alpha = 0.4f) else MaterialTheme.colorScheme.error,
+            ),
+            contentPadding = PaddingValues(horizontal = 8.dp),
         ) {
-            OutlinedButton(
-                onClick = { onAction(DeployAction.OpenControlPanel) },
-                modifier = Modifier.weight(1f).height(52.dp),
-                shape = CsqttShapes.Pill,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color.Transparent,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-                contentPadding = PaddingValues(horizontal = 4.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-            ) {
-                Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "Панель",
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                )
-                IconButton(
-                    onClick = { onAction(DeployAction.PanelInfo) },
-                    modifier = Modifier.size(34.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                        contentDescription = "Информация о панели",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-
-            Button(
-                onClick = { onAction(DeployAction.Uninstall) },
-                enabled = !state.isDeploying && state.canUninstall,
-                modifier = Modifier.weight(1f).height(52.dp),
-                shape = CsqttShapes.Pill,
-                contentPadding = PaddingValues(horizontal = 8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                ),
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp)
-            ) {
-                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Удалить", fontWeight = FontWeight.Bold, maxLines = 1)
-            }
+            Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Авторизация", fontWeight = FontWeight.Bold, maxLines = 1)
         }
     }
 }

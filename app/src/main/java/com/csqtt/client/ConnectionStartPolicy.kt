@@ -10,6 +10,20 @@ internal enum class ConnectionStartBlocker(val message: String) {
 }
 
 internal object ConnectionStartPolicy {
+    fun hasReadyVkCredentials(
+        linkMode: Boolean,
+        linkHashCount: Int,
+        linkTokenPresent: Boolean,
+        autoHashMode: Boolean,
+        storedTokenPresent: Boolean,
+        manualHashCount: Int,
+    ): Boolean = when {
+        linkMode -> linkHashCount > 0 || linkTokenPresent || manualHashCount > 0 ||
+            (autoHashMode && storedTokenPresent)
+        autoHashMode -> storedTokenPresent
+        else -> manualHashCount > 0
+    }
+
     fun blocker(
         linkMode: Boolean,
         linkValid: Boolean,
@@ -23,8 +37,6 @@ internal object ConnectionStartPolicy {
         if (linkMode) return if (linkValid) null else ConnectionStartBlocker.Link
         if (!peerValid) return ConnectionStartBlocker.Server
         if (!peerPortValid) return ConnectionStartBlocker.Port
-        if (!connectionPasswordReadable) return ConnectionStartBlocker.StoredSecret
-        if (!connectionPasswordSet) return ConnectionStartBlocker.Password
         return null
     }
 }

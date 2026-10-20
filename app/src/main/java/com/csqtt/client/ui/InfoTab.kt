@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import com.csqtt.client.showRaisedToast
@@ -95,6 +92,7 @@ import com.csqtt.client.fetchLatestReleaseInfo
 import com.csqtt.client.isNewerVersion
 import kotlinx.coroutines.launch
 import com.csqtt.client.ui.components.CsqttScreen
+import com.csqtt.client.ui.design.CsqttShapes
 import com.csqtt.client.ui.design.CsqttSpacing
 import com.csqtt.client.ui.dialogs.CryptoDonateDialog
 
@@ -102,7 +100,8 @@ private const val ReleasesUrl = CsqttConstants.Links.RELEASES
 private const val IssuesUrl = CsqttConstants.Links.ISSUES
 private const val DeveloperProfileUrl = CsqttConstants.Links.DEVELOPER_PROFILE
 private const val RepositoryUrl = CsqttConstants.Links.REPOSITORY
-private const val DonateUrl = CsqttConstants.Links.DONATE
+private const val TelegramUrl = CsqttConstants.Links.TELEGRAM
+private const val TelegramHandle = CsqttConstants.Links.TELEGRAM_HANDLE
 
 private val browserPackages = listOf(
     "com.android.chrome",
@@ -181,8 +180,8 @@ fun InfoTab(
         ) {
             InfoHeroCard(
                 currentVersion = currentVersion,
-                onSupportClick = { openUrlInBrowser(context, DonateUrl) },
                 onCryptoClick = { showCryptoDialog = true },
+                onTelegramClick = { openUrlInBrowser(context, TelegramUrl) },
             )
 
         ExpandableSectionCard(
@@ -364,6 +363,20 @@ fun InfoTab(
             )
 
             ProjectLinkRow(
+                title = "Telegram разработчика",
+                subtitle = TelegramHandle,
+                onClick = { openUrlInBrowser(context, TelegramUrl) },
+                icon = {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_telegram),
+                        contentDescription = null,
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            )
+
+            ProjectLinkRow(
                 title = "Актуальные релизы",
                 subtitle = "Страница загрузки APK",
                 onClick = { openUrlInBrowser(context, ReleasesUrl) },
@@ -378,9 +391,42 @@ fun InfoTab(
             )
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp, bottom = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Surface(
+                shape = CsqttShapes.Pill,
+                color = Color.Transparent,
+                modifier = Modifier
+                    .clip(CsqttShapes.Pill)
+                    .clickable { openUrlInBrowser(context, TelegramUrl) }
+                    .padding(4.dp)
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_telegram),
+                    contentDescription = "Telegram: $TelegramHandle",
+                    tint = Color.Unspecified,
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+            Text(
+                text = TelegramHandle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(CsqttShapes.Control)
+                    .clickable { openUrlInBrowser(context, TelegramUrl) }
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 }
-
 

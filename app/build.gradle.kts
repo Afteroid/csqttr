@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 import java.util.Properties
 
 plugins {
@@ -24,8 +21,6 @@ fun requiredReleaseSigningValue(name: String): String? =
 
 val releaseKeystorePath = requiredReleaseSigningValue("KEYSTORE_FILE")?.trim()
 val releaseKeystoreFile = releaseKeystorePath?.let { path ->
-    // Keep supporting the existing ../release.keystore convention relative to
-    // the repository root, while also accepting absolute and root-relative paths.
     if (path.startsWith("../") || path.startsWith("..\\")) {
         rootProject.file(path.substring(3))
     } else {
@@ -69,8 +64,8 @@ android {
         applicationId = "csqtt.quic.amurcanov"
         minSdk = 26
         targetSdk = 37
-        versionCode = 221
-        versionName = "2.1.9"
+        versionCode = 230
+        versionName = "2.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -194,6 +189,10 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.85")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.85")
     implementation("org.bouncycastle:bcutil-jdk18on:1.85")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("com.google.zxing:core:3.5.3")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

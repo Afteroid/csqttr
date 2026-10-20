@@ -21,6 +21,7 @@ $manifestPath = Join-Path $assetDirectory "csqtt.server-provenance.json"
 $cargoTomlPath = Join-Path $projectRoot "rust-server\Cargo.toml"
 $cargoLockPath = Join-Path $projectRoot "rust-server\Cargo.lock"
 $wireProtocolPath = Join-Path $projectRoot "shared\wire_protocol.rs"
+$wireProtocolRevisionPath = Join-Path $projectRoot "rust-server\main.rs"
 $schema = "csqtt.server-asset-provenance.v2"
 $marker = "CSQTT_RUST_SERVER_PRODUCTION_V1"
 $assetSpecs = @(
@@ -84,9 +85,9 @@ function Get-CargoPackage {
 }
 
 function Get-WireProtocolRevision {
-    Assert-RegularFile -Path $wireProtocolPath -Label "Wire protocol revision source"
+    Assert-RegularFile -Path $wireProtocolRevisionPath -Label "Wire protocol revision source"
     $match = [regex]::Match(
-        [IO.File]::ReadAllText($wireProtocolPath),
+        [IO.File]::ReadAllText($wireProtocolRevisionPath),
         'WIRE_PROTOCOL_REVISION\s*:\s*&str\s*=\s*"([^"]+)"'
     )
     if (-not $match.Success) {
@@ -102,8 +103,6 @@ function Get-BuildInputHash {
         $cargoTomlPath,
         $cargoLockPath,
         $wireProtocolPath,
-        (Join-Path $projectRoot "shared\selective_fec.rs"),
-        (Join-Path $projectRoot "shared\striped_scheduler.rs"),
         $PSCommandPath
     )
     $files += Get-ChildItem -LiteralPath (Join-Path $projectRoot "rust-server") -File -Filter *.rs |

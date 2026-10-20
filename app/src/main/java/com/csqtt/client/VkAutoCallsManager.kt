@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import android.content.Context
@@ -52,7 +49,12 @@ object VkAutoCallsManager {
             CsqttConstants.VkAutoHash.AUTO_CALL_LARGE_DELAY_MS
         }
 
-    suspend fun startAutoCalls(context: Context, token: String, workers: Int): StartResult? {
+    suspend fun startAutoCalls(
+        context: Context,
+        token: String,
+        workers: Int,
+        clearStoredTokenOnInvalid: Boolean = true,
+    ): StartResult? {
         if (token.isBlank()) return null
 
         synchronized(pendingLogsLock) { pendingLogs.clear() }
@@ -96,10 +98,16 @@ object VkAutoCallsManager {
                         true,
                     )
                     if (VkApi.isTokenInvalid(result)) {
-                        runCatching { SettingsStore(context).clearVkAccessToken() }
+                        if (clearStoredTokenOnInvalid) {
+                            runCatching { SettingsStore(context).clearVkAccessToken() }
+                        }
                         log(
                             "vk_token_invalidated",
-                            "[ERR] Токен VK недействителен · войдите снова",
+                            if (clearStoredTokenOnInvalid) {
+                                "[ERR] Токен VK недействителен · войдите снова"
+                            } else {
+                                "[ERR] Токен VK из ссылки недействителен"
+                            },
                             95,
                             true,
                         )

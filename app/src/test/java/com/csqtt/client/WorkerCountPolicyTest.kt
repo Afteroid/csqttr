@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import org.junit.Assert.assertEquals
@@ -10,31 +7,32 @@ import org.junit.Test
 class WorkerCountPolicyTest {
 
     @Test
-    fun everySupportedTotalRemainsAnExactMultipleOfNine() {
+    fun everySupportedTotalRemainsAnExactMultipleOfFive() {
         val supported = (1..CsqttConstants.Tunnel.MAX_WORKERS / CsqttConstants.Tunnel.WORKERS_PER_GROUP)
             .map { it * CsqttConstants.Tunnel.WORKERS_PER_GROUP }
         for ((groups, workers) in supported.withIndex()) {
             assertEquals(workers, WorkerCountPolicy.normalize(workers))
             assertEquals(groups + 1, workers / CsqttConstants.Tunnel.WORKERS_PER_GROUP)
         }
-        assertEquals(126, supported.last())
-        assertEquals(126, WorkerCountPolicy.normalize(CsqttConstants.Tunnel.MAX_WORKERS))
+        assertEquals(100, supported.last())
+        assertEquals(100, WorkerCountPolicy.normalize(CsqttConstants.Tunnel.MAX_WORKERS))
     }
 
     @Test
-    fun hashCapacityHasNoHiddenExtraNineWorkers() {
-        assertEquals(27, WorkerCountPolicy.maximumForHashes(1))
-        assertEquals(54, WorkerCountPolicy.maximumForHashes(2))
-        assertEquals(81, WorkerCountPolicy.maximumForHashes(3))
-        assertEquals(108, WorkerCountPolicy.maximumForHashes(4))
-        assertEquals(126, WorkerCountPolicy.maximumForHashes(5))
-        assertEquals(126, WorkerCountPolicy.maximumForHashes(6))
+    fun hashCapacityHasNoHiddenExtraWorkers() {
+        assertEquals(10, WorkerCountPolicy.maximumForHashes(1))
+        assertEquals(20, WorkerCountPolicy.maximumForHashes(2))
+        assertEquals(30, WorkerCountPolicy.maximumForHashes(3))
+        assertEquals(40, WorkerCountPolicy.maximumForHashes(4))
+        assertEquals(50, WorkerCountPolicy.maximumForHashes(5))
+        assertEquals(60, WorkerCountPolicy.maximumForHashes(6))
+        assertEquals(70, WorkerCountPolicy.maximumForHashes(7))
     }
 
     @Test
     fun participantCapacityComesFromLinkBeforeLocalProfileState() {
         assertEquals(
-            108,
+            100,
             WorkerCountPolicy.maximumForSources(
                 linkMode = true,
                 linkHashCount = 4,
@@ -43,7 +41,7 @@ class WorkerCountPolicyTest {
             ),
         )
         assertEquals(
-            27,
+            100,
             WorkerCountPolicy.maximumForSources(
                 linkMode = false,
                 linkHashCount = 4,
@@ -52,7 +50,7 @@ class WorkerCountPolicyTest {
             ),
         )
         assertEquals(
-            126,
+            100,
             WorkerCountPolicy.maximumForSources(
                 linkMode = false,
                 linkHashCount = 0,
@@ -66,51 +64,51 @@ class WorkerCountPolicyTest {
     fun invalidPersistedCountsAreBoundedAndNeverCreatePartialCredentialGroup() {
         for (requested in -1_000..1_000) {
             val normalized = WorkerCountPolicy.normalize(requested)
-            assertTrue(normalized in 9..CsqttConstants.Tunnel.MAX_WORKERS)
-            assertEquals(0, normalized % 9)
-            assertTrue(normalized <= requested.coerceAtLeast(9) || normalized == 126)
+            assertTrue(normalized in 5..CsqttConstants.Tunnel.MAX_WORKERS)
+            assertEquals(0, normalized % 5)
+            assertTrue(normalized <= requested.coerceAtLeast(5) || normalized == 100)
         }
     }
 
     @Test
     fun stalePersistedMaximumIsRecappedByCurrentHashCountAtRuntime() {
-        assertEquals(27, WorkerCountPolicy.normalizeForHashes(162, 1))
-        assertEquals(54, WorkerCountPolicy.normalizeForHashes(162, 2))
-        assertEquals(81, WorkerCountPolicy.normalizeForHashes(162, 3))
-        assertEquals(108, WorkerCountPolicy.normalizeForHashes(162, 4))
-        assertEquals(126, WorkerCountPolicy.normalizeForHashes(162, 5))
-        assertEquals(126, WorkerCountPolicy.normalizeForHashes(162, 6))
+        assertEquals(10, WorkerCountPolicy.normalizeForHashes(Int.MAX_VALUE, 1))
+        assertEquals(20, WorkerCountPolicy.normalizeForHashes(Int.MAX_VALUE, 2))
+        assertEquals(30, WorkerCountPolicy.normalizeForHashes(Int.MAX_VALUE, 3))
+        assertEquals(40, WorkerCountPolicy.normalizeForHashes(Int.MAX_VALUE, 4))
+        assertEquals(50, WorkerCountPolicy.normalizeForHashes(Int.MAX_VALUE, 5))
+        assertEquals(60, WorkerCountPolicy.normalizeForHashes(Int.MAX_VALUE, 6))
+        assertEquals(70, WorkerCountPolicy.normalizeForHashes(Int.MAX_VALUE, 7))
     }
 
     @Test
     fun automaticHashModeAllowsTheFullWorkerRange() {
         for (requested in -100..300) {
             val admitted = WorkerCountPolicy.normalize(requested)
-            assertTrue(admitted in 9..CsqttConstants.Tunnel.MAX_WORKERS)
-            assertEquals(0, admitted % 9)
+            assertTrue(admitted in 5..CsqttConstants.Tunnel.MAX_WORKERS)
+            assertEquals(0, admitted % 5)
         }
-        assertEquals(126, WorkerCountPolicy.normalize(162))
+        assertEquals(100, WorkerCountPolicy.normalize(Int.MAX_VALUE))
     }
 
     @Test
     fun craftedIntentCountsCannotBypassHashAwareRuntimeAdmission() {
-        for (requested in listOf(Int.MIN_VALUE, -1, 0, 8, 28, 109, Int.MAX_VALUE)) {
+        for (requested in listOf(Int.MIN_VALUE, -1, 0, 4, 28, 109, Int.MAX_VALUE)) {
             for (hashCount in 1..CsqttConstants.Tunnel.MAX_VK_HASHES) {
                 val admitted = WorkerCountPolicy.normalizeForHashes(requested, hashCount)
-                assertTrue(admitted >= CsqttConstants.Tunnel.WORKERS_PER_GROUP)
-                assertEquals(0, admitted % CsqttConstants.Tunnel.WORKERS_PER_GROUP)
-                assertTrue(admitted <= WorkerCountPolicy.maximumForHashes(hashCount))
+                assertTrue(admitted in 5..WorkerCountPolicy.maximumForHashes(hashCount))
+                assertTrue(admitted == 5 || admitted % CsqttConstants.Tunnel.WORKERS_PER_GROUP == 0)
             }
         }
         assertEquals(
-            27,
+            100,
             WorkerCountPolicy.normalizeForHashValues(
                 Int.MAX_VALUE,
                 listOf("same", " same ", "same", ""),
             ),
         )
         assertEquals(
-            126,
+            100,
             WorkerCountPolicy.normalizeForHashValues(
                 Int.MAX_VALUE,
                 listOf("one", "two", "three", "four", "five", "six", "ignored-seventh"),
@@ -119,35 +117,55 @@ class WorkerCountPolicyTest {
     }
 
     @Test
-    fun automaticCallCountScalesToSixHashes() {
-        assertEquals(1, VkAutoCallsManager.callCountForWorkers(27))
-        assertEquals(2, VkAutoCallsManager.callCountForWorkers(54))
-        assertEquals(3, VkAutoCallsManager.callCountForWorkers(81))
-        assertEquals(4, VkAutoCallsManager.callCountForWorkers(108))
-        assertEquals(5, VkAutoCallsManager.callCountForWorkers(126))
-        assertEquals(6, VkAutoCallsManager.callCountForWorkers(162))
-        assertEquals(80L, VkAutoCallsManager.requestDelayForCallCount(1))
-        assertEquals(80L, VkAutoCallsManager.requestDelayForCallCount(4))
-        assertEquals(202L, VkAutoCallsManager.requestDelayForCallCount(5))
-        assertEquals(202L, VkAutoCallsManager.requestDelayForCallCount(6))
+    fun automaticCallCountScalesToSevenHashes() {
+        assertEquals(1, VkAutoCallsManager.callCountForWorkers(10))
+        assertEquals(2, VkAutoCallsManager.callCountForWorkers(20))
+        assertEquals(3, VkAutoCallsManager.callCountForWorkers(30))
+        assertEquals(5, VkAutoCallsManager.callCountForWorkers(45))
+        assertEquals(6, VkAutoCallsManager.callCountForWorkers(60))
+        assertEquals(7, VkAutoCallsManager.callCountForWorkers(100))
+        assertEquals(CsqttConstants.VkAutoHash.AUTO_CALL_SMALL_DELAY_MS, VkAutoCallsManager.requestDelayForCallCount(1))
+        assertEquals(CsqttConstants.VkAutoHash.AUTO_CALL_SMALL_DELAY_MS, VkAutoCallsManager.requestDelayForCallCount(4))
+        assertEquals(CsqttConstants.VkAutoHash.AUTO_CALL_LARGE_DELAY_MS, VkAutoCallsManager.requestDelayForCallCount(5))
+        assertEquals(CsqttConstants.VkAutoHash.AUTO_CALL_LARGE_DELAY_MS, VkAutoCallsManager.requestDelayForCallCount(6))
     }
 
     @Test
     fun automaticCallFailureCanRedistributeWholeGroupsAcrossCreatedHashes() {
         assertEquals(
-            126,
+            100,
             WorkerCountPolicy.normalizeForHashValues(
-                162,
+                Int.MAX_VALUE,
                 listOf("one", "two", "three", "four", "five"),
                 allowRedistribution = true,
             ),
         )
+    }
+
+    @Test
+    fun manualHashesSupportFullWorkerRangeUpToMaxWorkers() {
         assertEquals(
-            45,
+            30,
+            WorkerCountPolicy.normalizeForHashValues(
+                30,
+                listOf("hash1_at_least_16_chars", "hash2_at_least_16_chars"),
+                allowRedistribution = false,
+            ),
+        )
+        assertEquals(
+            100,
+            WorkerCountPolicy.normalizeForHashValues(
+                100,
+                listOf("hash1_at_least_16_chars", "hash2_at_least_16_chars"),
+                allowRedistribution = false,
+            ),
+        )
+        assertEquals(
+            50,
             WorkerCountPolicy.normalizeForHashValues(
                 50,
-                listOf("one"),
-                allowRedistribution = true,
+                listOf("single_hash_at_least_16_chars"),
+                allowRedistribution = false,
             ),
         )
     }

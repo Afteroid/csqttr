@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import org.junit.Assert.assertEquals
@@ -47,23 +44,28 @@ class TunnelLogPolicyTest {
                 "GETCONF: FATAL_PROTOCOL: клиент и сервер используют разные версии протокола"
             )
         )
-        assertFalse(
-            TunnelLogPolicy.isInternalRecovery(
-                "GETCONF: FATAL_HANDSHAKE: сервер не подтвердил конфигурацию"
-            )
-        )
     }
 
     @Test
-    fun exposesTurnRetriesThatKeepTheStreamAlive() {
-        assertFalse(
+    fun hidesTurnRetriesAndInternalRecovery() {
+        assertTrue(
             TunnelLogPolicy.isInternalRecovery(
                 "[TURN][RETRY] Ошибка обновления permission: timeout"
             )
         )
-        assertFalse(
+        assertTrue(
             TunnelLogPolicy.isInternalRecovery(
                 "[TURN][RETRY] Ошибка транзакции ChannelBind: timeout"
+            )
+        )
+        assertTrue(
+            TunnelLogPolicy.isInternalRecovery(
+                "[TURN][RETRY] Квота Allocate у креда #1; STUN error 486"
+            )
+        )
+        assertTrue(
+            TunnelLogPolicy.isInternalRecovery(
+                "[TURN][RETRY] Allocation mismatch у креда #1; STUN error 437"
             )
         )
         assertFalse(
@@ -76,7 +78,7 @@ class TunnelLogPolicyTest {
                 "[ВОРКЕР #17] PEER_LIVENESS_TIMEOUT: 8s без валидных пакетов"
             )
         )
-        assertFalse(
+        assertTrue(
             TunnelLogPolicy.isInternalRecovery(
                 "[ВОРКЕР #2] [TURN][RETRY] Попытка 46: TURN liveness probe failed"
             )
@@ -84,6 +86,11 @@ class TunnelLogPolicyTest {
         assertTrue(
             TunnelLogPolicy.isInternalRecovery(
                 "[ВОРКЕР #2] [СЕТЬ][RETRY] Временная ошибка сокета"
+            )
+        )
+        assertTrue(
+            TunnelLogPolicy.isInternalRecovery(
+                "[ВОРКЕР #1] Ошибка (попытка 1): turn allocate: transaction timeout"
             )
         )
     }

@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,6 +30,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.csqtt.client.AppReleaseInfo
 import com.csqtt.client.RemoteVersionSource
 import com.csqtt.client.ui.design.CsqttShapes
+import com.csqtt.client.ui.design.CsqttSizes
 
 @Composable
 fun AppUpdateDialog(
@@ -57,25 +56,26 @@ fun AppUpdateDialog(
     ) {
         Surface(
             shape = CsqttShapes.Dialog,
-            color = MaterialTheme.colorScheme.surface,
+            color = appSectionCardColor(),
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 8.dp,
+            border = BorderStroke(1.dp, appSectionCardBorderColor()),
+            tonalElevation = 0.dp,
             modifier = Modifier.fillMaxWidth(0.92f)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 22.dp, vertical = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Update,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(22.dp)
                     )
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(8.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             text = title,
@@ -85,7 +85,7 @@ fun AppUpdateDialog(
                         )
                         Text(
                             text = release.versionTag,
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -94,35 +94,35 @@ fun AppUpdateDialog(
 
                 Text(
                     text = description,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 20.sp
+                    lineHeight = 16.sp
                 )
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
                         onClick = onPostpone,
                         modifier = Modifier
                             .weight(1f)
-                            .height(50.dp),
+                            .height(CsqttSizes.ControlHeight),
                         shape = CsqttShapes.Pill
                     ) {
-                        Text("Позже", fontWeight = FontWeight.SemiBold)
+                        Text("Позже", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                     }
 
                     Button(
                         onClick = onUpdate,
                         modifier = Modifier
                             .weight(1f)
-                            .height(50.dp),
+                            .height(CsqttSizes.ControlHeight),
                         shape = CsqttShapes.Pill
                     ) {
-                        Text("Обновить", fontWeight = FontWeight.Bold)
+                        Text("Обновить", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                     }
                 }
             }

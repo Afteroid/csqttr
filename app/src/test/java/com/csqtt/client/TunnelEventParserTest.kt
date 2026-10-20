@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import org.junit.Assert.assertEquals
@@ -32,6 +29,30 @@ class TunnelEventParserTest {
     }
 
     @Test
+    fun parsesWorkers() {
+        val event = TunnelEventParser.parse(
+            "__CSQTT_EVENT__|WORKERS|{\"workers\":36}"
+        ) as TunnelEventParser.Event.Workers
+
+        assertEquals(36, event.workers)
+
+        val event4 = TunnelEventParser.parse(
+            "__CSQTT_EVENT__|WORKERS|{\"workers\":4}"
+        ) as TunnelEventParser.Event.Workers
+
+        assertEquals(4, event4.workers)
+
+        val event100 = TunnelEventParser.parse(
+            "__CSQTT_EVENT__|WORKERS|{\"workers\":100}"
+        ) as TunnelEventParser.Event.Workers
+
+        assertEquals(100, event100.workers)
+
+        assertNull(TunnelEventParser.parse("__CSQTT_EVENT__|WORKERS|{\"workers\":2}"))
+        assertNull(TunnelEventParser.parse("__CSQTT_EVENT__|WORKERS|{\"workers\":101}"))
+    }
+
+    @Test
     fun rustLifecycleObjectPayloadsMatchKotlinContract() {
         assertTrue(
             TunnelEventParser.parse("__CSQTT_EVENT__|READY|{}") is
@@ -48,6 +69,10 @@ class TunnelEventParserTest {
         assertTrue(
             TunnelEventParser.parse("__CSQTT_EVENT__|NETWORK_SUSPECT|{}") is
                 TunnelEventParser.Event.NetworkSuspect
+        )
+        assertTrue(
+            TunnelEventParser.parse("__CSQTT_EVENT__|DTLS|{}") is
+                TunnelEventParser.Event.Dtls
         )
     }
 

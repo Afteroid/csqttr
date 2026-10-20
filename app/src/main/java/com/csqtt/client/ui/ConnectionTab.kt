@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client.ui
 
 import android.content.Intent
@@ -8,27 +5,22 @@ import android.net.VpnService
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,7 +40,6 @@ import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.csqtt.client.ConnectionSource
@@ -87,15 +78,16 @@ internal fun ConnectionTab(
     val autoPausedForWifi by TunnelManager.autoPausedForWifi.collectAsStateWithLifecycle()
     val cooldownActive by TunnelManager.cooldownActive.collectAsStateWithLifecycle()
 
-    val csqttLinkMode by settingsStore.csqttLinkMode.collectAsStateWithLifecycle(initialValue = false)
-    val csqttLink by settingsStore.csqttLink.collectAsStateWithLifecycle(initialValue = "")
+    val csqttLinkMode = tunnelAuthSettings.csqttLinkMode
+    val csqttLink = tunnelAuthSettings.csqttLink
     val peer by settingsStore.peer.collectAsStateWithLifecycle(initialValue = "")
     val vkHashes by settingsStore.vkHashes.collectAsStateWithLifecycle(initialValue = "")
     val vkHashCheckResultsJson by settingsStore.vkHashCheckResults.collectAsStateWithLifecycle(initialValue = "{}")
     val workersPerHash by settingsStore.workersPerHash.collectAsStateWithLifecycle(initialValue = 18)
     val sni by settingsStore.sni.collectAsStateWithLifecycle(initialValue = "")
-    val obfsMode by settingsStore.obfsMode.collectAsStateWithLifecycle(initialValue = CsqttConstants.Tunnel.DEFAULT_OBFS_MODE)
     val turnTransport by settingsStore.turnTransport.collectAsStateWithLifecycle(initialValue = CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT)
+    val srtpMode by settingsStore.srtpMode.collectAsStateWithLifecycle(initialValue = SettingsStore.cachedSrtpMode ?: CsqttConstants.SrtpMode.DEFAULT)
+    val customTurnIps by settingsStore.customTurnIps.collectAsStateWithLifecycle(initialValue = "")
     val manualPortsEnabled by settingsStore.manualPortsEnabled.collectAsStateWithLifecycle(initialValue = false)
     val serverPeerPort by settingsStore.serverPeerPort.collectAsStateWithLifecycle(
         initialValue = CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT,
@@ -112,40 +104,47 @@ internal fun ConnectionTab(
 
     val parsedLink = remember(csqttLink) { parseCsqttLink(csqttLink) }
     val linkHashes = parsedLink?.hashes.orEmpty()
-    val manualHashes = remember(vkHashes, vkHashCheckResultsJson) {
+    val linkTokenActive = csqttLinkMode && parsedLink?.vkAccessToken?.isNotEmpty() == true
+    val rawManualHashes = remember(vkHashes) {
+        vkHashes.split(Regex("[,\\s\\n]+"))
+            .map(String::trim)
+            .filter { it.length >= 16 }
+            .distinct()
+    }
+    val activeManualHashes = remember(vkHashes, vkHashCheckResultsJson) {
         VkHashValidationCodec.active(
-            vkHashes.split(Regex("[,\\s\\n]+")),
+            rawManualHashes,
             VkHashValidationCodec.decode(vkHashCheckResultsJson),
         )
     }
+    val manualHashes = if (activeManualHashes.isNotEmpty()) activeManualHashes else rawManualHashes
     val accountAutoJsMode = vkAuthMode == CsqttConstants.VkAuth.MODE_AUTO_JS
     val hashSettingsLoaded = savedHashMode != null && savedVkAccessToken != null
     val autoHashMode = accountAutoJsMode || (
         savedHashMode != null && savedHashMode != CsqttConstants.VkAutoHash.MODE_MANUAL
     )
     val vkTokenActive = savedVkAccessToken?.isNotBlank() == true
-    val hashesReady = hashSettingsLoaded && when {
-        csqttLinkMode && linkHashes.isNotEmpty() -> true
-        autoHashMode -> vkTokenActive
-        else -> manualHashes.isNotEmpty()
-    }
+    val hashesReady = hashSettingsLoaded && ConnectionStartPolicy.hasReadyVkCredentials(
+        linkMode = csqttLinkMode,
+        linkHashCount = linkHashes.size,
+        linkTokenPresent = linkTokenActive,
+        autoHashMode = autoHashMode,
+        storedTokenPresent = vkTokenActive,
+        manualHashCount = manualHashes.size,
+    )
     val peerPortValid = !manualPortsEnabled || serverPeerPort in 1..65535
+    val trimmedPeer = peer.trim()
+    val isLocalOrUnspecifiedPeer = trimmedPeer == "0.0.0.0" || trimmedPeer == "127.0.0.1" || trimmedPeer.equals("localhost", ignoreCase = true) || trimmedPeer == "::1"
     val startBlocker = ConnectionStartPolicy.blocker(
         linkMode = csqttLinkMode,
         linkValid = parsedLink != null,
-        peerValid = peer.isNotBlank() && !peer.contains(":"),
+        peerValid = trimmedPeer.isNotBlank() && !trimmedPeer.contains(":") && !isLocalOrUnspecifiedPeer,
         peerPortValid = peerPortValid,
         connectionPasswordSet = connectionPassword.isNotBlank(),
         connectionPasswordReadable = tunnelAuthSettings.connectionPasswordState != StoredSecretState.Unreadable,
         hashesReady = hashesReady,
     )
     val isValid = startBlocker == null
-    val hashStatus = when {
-        csqttLinkMode && linkHashes.isNotEmpty() -> "${linkHashes.size}/${CsqttConstants.Tunnel.MAX_VK_HASHES}"
-        autoHashMode && vkTokenActive -> "Авто"
-        autoHashMode -> "Токен"
-        else -> "${manualHashes.size}/${CsqttConstants.Tunnel.MAX_VK_HASHES}"
-    }
 
     fun startIntent(source: ConnectionSource, generationId: Long, salt: String): Intent =
         Intent(context, TunnelService::class.java).apply {
@@ -153,7 +152,8 @@ internal fun ConnectionTab(
             putExtra("peer", source.peer)
             putExtra("vk_hashes", source.hashes)
             putExtra("vk_hashes_from_link", source.hashesFromLink)
-            putExtra("secondary_vk_hash", "")
+            putExtra("vk_access_token", source.vkAccessToken)
+            putExtra("vk_token_from_link", source.tokenFromLink)
             putExtra("workers_per_hash", workersPerHash)
             putExtra("port", 0)
             putExtra("sni", sni)
@@ -163,8 +163,10 @@ internal fun ConnectionTab(
             putExtra("captcha_solve_method", captchaSolveMethod)
             putExtra("fingerprint", activeFingerprint)
             putExtra("client_ids", activeClientIds)
-            putExtra("obfs_mode", obfsMode)
+            putExtra("obfs_mode", CsqttConstants.Tunnel.DEFAULT_OBFS_MODE)
             putExtra("turn_transport", turnTransport)
+            putExtra("srtp_mode", srtpMode)
+            putExtra("custom_turn_ips", customTurnIps)
             putExtra("generation_id", generationId)
             putExtra("session_salt", salt)
         }
@@ -263,9 +265,6 @@ internal fun ConnectionTab(
                 autoPausedForWifi = autoPausedForWifi,
                 cooldownActive = cooldownActive,
                 configurationValid = isValid,
-                obfsMode = obfsMode,
-                hashStatus = hashStatus,
-                workMode = workModeDisplayName(vkAuthMode),
                 onToggleTunnel = { toggleTunnel() },
             )
         }
@@ -280,9 +279,6 @@ private fun TunnelConnectionPanel(
     autoPausedForWifi: Boolean,
     cooldownActive: Boolean,
     configurationValid: Boolean,
-    obfsMode: String,
-    hashStatus: String,
-    workMode: String,
     onToggleTunnel: () -> Unit,
 ) {
     val isStarting = tunnelStarting && !tunnelRunning && !tunnelStopping
@@ -351,12 +347,6 @@ private fun TunnelConnectionPanel(
             )
 
             TunnelUptimeText(tunnelRunning = tunnelRunning || autoPausedForWifi || tunnelStopping)
-
-            TunnelConnectionStatusPanel(
-                obfs = obfsDisplayName(obfsMode),
-                hashStatus = hashStatus,
-                workMode = workMode,
-            )
         }
     }
 }
@@ -374,103 +364,6 @@ private fun TunnelUptimeText(tunnelRunning: Boolean) {
             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.70f)
         },
     )
-}
-
-@Composable
-private fun TunnelConnectionStatusPanel(
-    obfs: String,
-    hashStatus: String,
-    workMode: String,
-) {
-    Surface(
-        shape = CsqttShapes.Control,
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(IntrinsicSize.Min)
-                .padding(horizontal = 4.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ConnectionStatusItem(
-                title = "Маскировка",
-                value = obfs,
-                modifier = Modifier.weight(1f).padding(horizontal = 5.dp, vertical = 8.dp),
-            )
-            ConnectionStatusDivider()
-            ConnectionStatusItem(
-                title = "Хеши",
-                value = hashStatus,
-                modifier = Modifier.weight(1f).padding(horizontal = 5.dp, vertical = 8.dp),
-            )
-            ConnectionStatusDivider()
-            ConnectionStatusItem(
-                title = "Режим кредов",
-                value = workMode,
-                modifier = Modifier.weight(1f).padding(horizontal = 5.dp, vertical = 8.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ConnectionStatusItem(
-    title: String,
-    value: String,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.80f),
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
-@Composable
-private fun ConnectionStatusDivider() {
-    Box(
-        modifier = Modifier
-            .fillMaxHeight()
-            .width(1.dp)
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
-    )
-}
-
-private fun obfsDisplayName(mode: String): String = when (mode) {
-    "audio" -> "Простая"
-    "video" -> "Средняя"
-    else -> mode.ifBlank { "Средняя" }
-}
-
-private fun workModeDisplayName(mode: String): String = when (mode) {
-    CsqttConstants.VkAuth.MODE_CAPTCHA -> "Капча"
-    CsqttConstants.VkAuth.MODE_AUTO_JS -> "Авто ВК"
-    else -> "Авто"
 }
 
 private fun formatTunnelUptime(seconds: Long?): String {

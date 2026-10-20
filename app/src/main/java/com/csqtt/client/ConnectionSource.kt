@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 package com.csqtt.client
 
 import com.csqtt.client.ui.utils.parseCsqttLink
@@ -12,31 +9,36 @@ data class ConnectionSource(
     val password: String,
     val hashes: String,
     val hashesFromLink: Boolean,
+    val vkAccessToken: String,
+    val tokenFromLink: Boolean,
 )
 
 suspend fun resolveConnectionSource(store: SettingsStore): ConnectionSource? {
     val invalidHashes = VkHashValidationCodec.decode(store.vkHashCheckResults.first())
-    fun activeHashes(raw: String): String = VkHashValidationCodec.active(
-        raw.split(Regex("[,\\s\\n]+")),
-        invalidHashes,
-    ).joinToString(",")
+    fun activeHashes(raw: String): String {
+        val rawList = raw.split(Regex("[,\\s\\n]+")).map(String::trim).filter { it.length >= 16 }.distinct()
+        val filtered = VkHashValidationCodec.active(rawList, invalidHashes)
+        return (if (filtered.isNotEmpty()) filtered else rawList).joinToString(",")
+    }
 
     if (store.csqttLinkMode.first()) {
         val link = parseCsqttLink(store.csqttLink.first()) ?: return null
         val linkHashes = activeHashes(link.hashes.joinToString(","))
+        val tokenFromLink = link.vkAccessToken.isNotEmpty()
         return ConnectionSource(
             peer = link.peerAddress(),
             password = link.password,
-            hashes = linkHashes.ifEmpty { activeHashes(store.vkHashes.first()) },
+            hashes = if (tokenFromLink) "" else linkHashes.ifEmpty { activeHashes(store.vkHashes.first()) },
             hashesFromLink = linkHashes.isNotEmpty(),
+            vkAccessToken = link.vkAccessToken,
+            tokenFromLink = tokenFromLink,
         )
     }
 
     val basePeer = store.peer.first()
     val passwordState = store.connectionPasswordState.first()
     val password = passwordState.value
-    if (passwordState.state == StoredSecretState.Unreadable) return null
-    if (basePeer.isBlank() || password.isBlank()) return null
+    if (basePeer.isBlank()) return null
     val serverPeerPort = if (store.manualPortsEnabled.first()) {
         store.serverPeerPort.first()
     } else {
@@ -48,5 +50,7 @@ suspend fun resolveConnectionSource(store: SettingsStore): ConnectionSource? {
         password = password,
         hashes = activeHashes(store.vkHashes.first()),
         hashesFromLink = false,
+        vkAccessToken = "",
+        tokenFromLink = false,
     )
 }

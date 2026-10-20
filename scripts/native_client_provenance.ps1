@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: 2026 amurcanov
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -91,12 +88,10 @@ function Get-BuildInputHash {
         (Join-Path $projectRoot "rust-client\Cargo.toml"),
         (Join-Path $projectRoot "rust-client\Cargo.lock"),
         (Join-Path $projectRoot "rust-client"),
-        (Join-Path $projectRoot "rust-client\dispatcher"),
         (Join-Path $projectRoot "rust-client\vendor\primp"),
         (Join-Path $projectRoot "scripts\find_android_sdk_ndk.bat"),
         (Join-Path $projectRoot "scripts\native_client_provenance.ps1"),
-        (Join-Path $projectRoot "shared\wire_protocol.rs"),
-        (Join-Path $projectRoot "shared\striped_scheduler.rs")
+        (Join-Path $projectRoot "shared\wire_protocol.rs")
     )
     $files = @()
     foreach ($entry in $entries) {
@@ -105,7 +100,6 @@ function Get-BuildInputHash {
         }
         elseif (Test-Path -LiteralPath $entry -PathType Container) {
             if ($entry -eq (Join-Path $projectRoot "rust-client")) {
-                # Crate root: hash only top-level sources, skip target/ and vendor/
                 $files += Get-ChildItem -LiteralPath $entry -File -Filter *.rs |
                     ForEach-Object { $_.FullName }
             }
