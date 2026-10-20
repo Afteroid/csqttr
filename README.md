@@ -1,6 +1,6 @@
 <div align="center">
 
-# CSQTT
+# CSQTT-Rebirth
 
 <br>
 
