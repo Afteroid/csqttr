@@ -721,6 +721,24 @@ pub fn is_expired(entry: &PasswordEntry) -> bool {
 
 pub const OWNER_TUNNEL_IP: &str = "10.66.67.2";
 
+// The address an IMPORTED client gets: its own only when it is in this server's pool and no client already has it —
+// an export merged into a server with clients (or two clients of one export on one address) gave two clients one
+// tunnel address, and each broke the other's traffic. Clients are inserted one by one, so earlier ones in the same
+// import count as taken.
+// Is `ip` an address of this server's client pool (.3–.250 of 10.66.67.0/24, as get_next_ip hands out)? One from
+// elsewhere — another server's export, a store copied between servers — is not a usable address here.
+pub fn ip_in_pool(ip: &str) -> bool {
+    ip.parse::<std::net::Ipv4Addr>()
+        .is_ok_and(|a| a.octets()[..3] == [10, 66, 67] && (3..=250).contains(&a.octets()[3]))
+}
+
+pub fn import_ip(db: &Database, ip: &str) -> String {
+    if ip_in_pool(ip) && !db.passwords.values().any(|entry| entry.ip == ip) {
+        return ip.to_owned();
+    }
+    get_next_ip(db).unwrap_or_default()
+}
+
 pub fn get_next_ip(db: &Database) -> Option<String> {
     let mut buf = String::with_capacity(16);
     for i in 3..=250u8 {
@@ -1790,6 +1808,30 @@ fn write_traffic(connection: &mut Connection, traffic: &TrafficSnapshot) -> Resu
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn import_never_hands_out_a_taken_address() {
+        let mut db = Database::default();
+        let entry = |ip: &str| PasswordEntry { ip: ip.to_owned(), ..Default::default() };
+        db.passwords.insert("existing".into(), entry("10.66.67.3"));
+        // a free in-pool address is kept
+        assert_eq!(super::import_ip(&db, "10.66.67.40"), "10.66.67.40");
+        // a taken one, or one from another subnet, gets the next free address
+        assert_eq!(super::import_ip(&db, "10.66.67.3"), "10.66.67.4");
+        assert_eq!(super::import_ip(&db, "10.66.68.9"), "10.66.67.4");
+        // an earlier client of the same import counts as taken
+        db.passwords.insert("imported-1".into(), entry("10.66.67.4"));
+        assert_eq!(super::import_ip(&db, "10.66.67.4"), "10.66.67.5");
+    }
+
+    #[test]
+    fn ip_in_pool_is_this_servers_pool_only() {
+        // stock config (no --tun-addr): 10.66.67.3–.250
+        assert!(super::ip_in_pool("10.66.67.3") && super::ip_in_pool("10.66.67.250"));
+        for bad in ["", "10.66.67.1", "10.66.67.2", "10.66.67.251", "10.66.68.3", "fd66:67::3", "junk"] {
+            assert!(!super::ip_in_pool(bad), "{bad}");
+        }
+    }
+
     use super::{
         Database, DatabasePersistence, PasswordEntry, PersistenceQueue, PersistenceUpdate,
         TrafficCounters, TrafficSnapshot, load_database, save_database,
