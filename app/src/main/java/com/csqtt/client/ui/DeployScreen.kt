@@ -43,6 +43,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.csqtt.client.CSQTTTheme
 import com.csqtt.client.CsqttConstants
+import com.csqtt.client.PanelHostPolicy
 import com.csqtt.client.R
 import com.csqtt.client.ui.components.CsqttScreen
 import com.csqtt.client.ui.components.CsqttSettingRow
@@ -208,7 +209,12 @@ internal fun DeployScreen(
                             DeployTextField(
                                 value = state.panelDisplayUrl,
                                 onValueChange = {},
-                                placeholder = "https://1.2.3.4:46002/uuid",
+                                placeholder = if (PanelHostPolicy.isDomainHost(state.host)) {
+                                    // В доменном режиме порт не используется: форма без порта.
+                                    "https://panel.example.com/uuid"
+                                } else {
+                                    "https://1.2.3.4:46002/uuid"
+                                },
                                 enabled = !state.isDeploying,
                                 readOnly = true,
                                 singleLine = false,
@@ -294,40 +300,55 @@ private fun ManualPortFields(
     state: DeployUiState,
     onAction: (DeployAction) -> Unit,
 ) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(CsqttSpacing.Sm),
+        verticalArrangement = Arrangement.spacedBy(CsqttSpacing.Xxs),
     ) {
-        DeployTextField(
-            value = state.sshPort,
-            onValueChange = { onAction(DeployAction.SshPortChanged(it)) },
-            label = "SSH-порт",
-            placeholder = "22",
-            enabled = !state.isDeploying,
-            isError = state.showValidation && !isValidPort(state.sshPort),
-            keyboardType = KeyboardType.Number,
-            modifier = Modifier.weight(1f),
-        )
-        DeployTextField(
-            value = state.peerPort,
-            onValueChange = { onAction(DeployAction.PeerPortChanged(it)) },
-            label = "Порт туннеля",
-            placeholder = "46000",
-            enabled = !state.isDeploying,
-            isError = state.showValidation && !isValidPort(state.peerPort),
-            keyboardType = KeyboardType.Number,
-            modifier = Modifier.weight(1f),
-        )
-        DeployTextField(
-            value = state.webPort,
-            onValueChange = { onAction(DeployAction.WebPortChanged(it)) },
-            label = "Порт WEB-панели",
-            placeholder = "46002",
-            enabled = !state.isDeploying,
-            isError = state.showValidation && !isValidPort(state.webPort),
-            keyboardType = KeyboardType.Number,
-            modifier = Modifier.weight(1f),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(CsqttSpacing.Sm),
+        ) {
+            DeployTextField(
+                value = state.sshPort,
+                onValueChange = { onAction(DeployAction.SshPortChanged(it)) },
+                label = "SSH-порт",
+                placeholder = "22",
+                enabled = !state.isDeploying,
+                isError = state.showValidation && !isValidPort(state.sshPort),
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f),
+            )
+            DeployTextField(
+                value = state.peerPort,
+                onValueChange = { onAction(DeployAction.PeerPortChanged(it)) },
+                label = "Порт туннеля",
+                placeholder = "46000",
+                enabled = !state.isDeploying,
+                isError = state.showValidation && !isValidPort(state.peerPort),
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f),
+            )
+            DeployTextField(
+                value = state.webPort,
+                onValueChange = { onAction(DeployAction.WebPortChanged(it)) },
+                label = "Порт WEB-панели",
+                placeholder = "46002",
+                enabled = !state.isDeploying,
+                isError = state.showValidation && !isValidPort(state.webPort) && !PanelHostPolicy.isDomainHost(state.host),
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        // Подсказка общая для ряда, а не supportingText третьего поля: иначе на 360dp
+        // текст заворачивается в 4–5 строк и вытягивает только web-порт, ломая ряд.
+        if (PanelHostPolicy.isDomainHost(state.host)) {
+            Text(
+                text = "В доменном режиме панель всегда на 443",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 
