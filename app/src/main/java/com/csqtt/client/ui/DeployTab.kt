@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.csqtt.client.DeployManager
 import com.csqtt.client.DeploySettingsSnapshot
+import com.csqtt.client.PanelHostPolicy
 import com.csqtt.client.SettingsStore
 import com.csqtt.client.TunnelManager
 import com.csqtt.client.CsqttConstants
@@ -79,7 +80,10 @@ internal data class DeployUiState(
     val showValidation: Boolean = false,
 ) {
     val portsValid: Boolean
-        get() = !manualPorts || listOf(sshPort, peerPort, webPort).all(::isValidPort)
+        get() = !manualPorts ||
+            // В доменном режиме web-порт не используется: панель всегда на 443.
+            (listOf(sshPort, peerPort).all(::isValidPort) &&
+                (PanelHostPolicy.isDomainHost(host) || isValidPort(webPort)))
 
     val authorizationConfigured: Boolean
         get() = webPanelConfigured && mainPasswordConfigured
@@ -95,14 +99,16 @@ internal data class DeployUiState(
 
     val panelDisplayUrl: String
         get() {
-            val h = host.ifBlank { "IP" }
-            val p = if (manualPorts) (webPort.toIntOrNull() ?: CsqttConstants.Network.DEFAULT_SERVER_WEB_PORT) else CsqttConstants.Network.DEFAULT_SERVER_WEB_PORT
-            val u = if (secretPathUuid.isNotBlank()) {
+            val path = if (secretPathUuid.isNotBlank()) {
                 if (secretPathUuid.startsWith("/")) secretPathUuid else "/$secretPathUuid"
             } else {
                 "/uuid"
             }
-            return "https://$h:$p$u"
+            return PanelHostPolicy.buildPanelUrl(
+                host = host,
+                webPort = PanelHostPolicy.webPortFor(host, manualPorts, webPort),
+                path = path,
+            )
         }
 }
 
@@ -304,7 +310,7 @@ internal fun DeployTab(
         val ports = resolveServerPorts(savedManualPorts, sshPort, peerPort, webPort)
         val effectiveSshPort = ports.ssh
         val effectivePeerPort = ports.peer
-        val effectiveWebPort = ports.web
+        val effectiveWebPort = PanelHostPolicy.webPortFor(host, savedManualPorts, webPort)
         val deployPrivateKey = if (savedSshKeysMode) savedSshPrivateKey else ""
         val deployKeyPassphrase = if (savedSshKeysMode) savedSshKeyPassphrase else ""
         val deployCertificate = if (savedSshKeysMode) savedSshCertificate else ""
@@ -313,7 +319,7 @@ internal fun DeployTab(
         scope.launch {
             settingsStore.saveDeploy(host)
             settingsStore.saveDeploySecrets(effectiveMainPass, sshLogin, sshPassword, savedWebLogin, savedWebPassword)
-            settingsStore.savePorts(effectivePeerPort, effectiveWebPort, effectiveSshPort.toString())
+            settingsStore.savePorts(effectivePeerPort, ports.web, effectiveSshPort.toString())
         }
         DeployManager.startDeploy()
         DeployManager.scope.launch {
@@ -494,20 +500,19 @@ internal fun DeployTab(
                     if (host.isBlank()) {
                         scope.launch { snackbarHostState.showSnackbar("Сначала укажите IP сервера") }
                     } else {
-                        val effectiveWebPort = resolveServerPorts(
-                            savedManualPorts,
-                            sshPort,
-                            peerPort,
-                            webPort,
-                        ).web
                         val path = if (savedSettings.secretPathUuid.isNotBlank()) {
                             "/${savedSettings.secretPathUuid.trimStart('/')}"
                         } else {
                             ""
                         }
+                        val panelUrl = PanelHostPolicy.buildPanelUrl(
+                            host = host,
+                            webPort = PanelHostPolicy.webPortFor(host, savedManualPorts, webPort),
+                            path = path,
+                        )
                         runCatching {
                             context.startActivity(
-                                Intent(Intent.ACTION_VIEW, "https://$host:$effectiveWebPort$path".toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                Intent(Intent.ACTION_VIEW, panelUrl.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             )
                         }.onFailure {
                             scope.launch { snackbarHostState.showSnackbar("Не удалось открыть панель управления") }
