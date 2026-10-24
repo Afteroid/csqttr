@@ -133,6 +133,15 @@ class DeployResultPolicyTest {
         assertEquals(ServerArchitecture.ARMV7, serverArchitectureForMachine("armhf\n"))
     }
 
+    @Test
+    fun uninstallSucceedsOnlyWithExitZeroAndItsMarker() {
+        assertTrue(isSuccessfulUninstallResult(0, "...\nCSQTT_UNINSTALL_OK\n"))
+        assertFalse(isSuccessfulUninstallResult(1, "CSQTT_UNINSTALL_OK"))
+        assertFalse(isSuccessfulUninstallResult(0, "CSQTT удалён"))
+        assertTrue(uninstallFailureMessage("CSQTT_DEPLOY_ERROR|validation|порт занят").contains("порт занят"))
+        assertTrue(parseDeployOutputLine("CSQTT_UNINSTALL_OK") == null)   // a marker for the app, not a line for the user
+    }
+
     @Test(expected = java.io.IOException::class)
     fun unsupportedRemoteVpsArchitectureStopsBeforeUpload() {
         serverArchitectureForMachine("riscv64\n")

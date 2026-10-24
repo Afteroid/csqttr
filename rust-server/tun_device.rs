@@ -2,8 +2,13 @@ use crate::packet::extract_dst_ipv4;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
+// swg-panel: read at runtime via swgpanel::{iface, subnet_cidr, subnet_prefix} (--iface / --tun-addr); kept as the
+// stock values.
+#[allow(dead_code)]
 pub const TUN_IFACE: &str = "csqtt1";
+#[allow(dead_code)]
 pub const TUN_SUBNET: &str = "10.66.67.0/24";
+#[allow(dead_code)]
 const SUBNET_PREFIX: [u8; 3] = [10, 66, 67];
 
 pub type SessionId = u64;
@@ -30,7 +35,7 @@ const FLOW_EVICT_EVERY: u32 = 1024;
 const FLOW_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 const SMALL_UDP_MAX_LEN: usize = 300;
 const SMALL_UDP_STICKY: std::time::Duration = std::time::Duration::from_secs(1);
-// The small-UDP pin holds a flow on ONE stream, and VK caps each allocation at about one stream's
+// swg-panel: the small-UDP pin holds a flow on ONE stream, and VK caps each allocation at about one stream's
 // rate (~2 Mbit/s): a pinned QUIC download or nested tunnel fell from 20 to 2.1 Mbit/s. A flow keeps its pin
 // only while it fits in one stream (3/4 of TB_RATE); above that it is bulk for BULK_HOLD and rotates in bursts.
 const PIN_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
@@ -484,7 +489,9 @@ impl Default for RouteTable {
 
 #[inline(always)]
 pub fn route_index(ip: [u8; 4]) -> Option<usize> {
-    (ip[..3] == SUBNET_PREFIX).then_some(ip[3] as usize)
+    // swg-panel: the /24 prefix follows the instance's --tun-addr (stock: 10.66.67). One process = one
+    // subnet, so this reads a process-global set once at boot.
+    (ip[..3] == crate::swgpanel::subnet_prefix()).then_some(ip[3] as usize)
 }
 
 pub fn parse_ipv4(value: &str) -> Option<[u8; 4]> {
@@ -674,7 +681,7 @@ mod tests {
 
     #[test]
     fn downlink_bulk_udp_with_small_packets_is_not_pinned() {
-        // A QUIC-like download (1300-byte packets at ~20 Mbit/s, a small one every 200 ms) must spread.
+        // swg-panel: a QUIC-like download (1300-byte packets at ~20 Mbit/s, a small one every 200 ms) must spread.
         let mut table = RouteTable::new();
         for w in 1..=10u16 {
             assert!(table.register(ip(2), w as _, w as _, w as _, w as _));
@@ -693,7 +700,7 @@ mod tests {
 
     #[test]
     fn downlink_game_flow_with_large_packets_stays_pinned() {
-        // The Steam fix stands for a flow that fits one stream (64 pkt/s, small and 1200-byte mixed).
+        // swg-panel: the Steam fix stands for a flow that fits one stream (64 pkt/s, small and 1200-byte mixed).
         let mut table = RouteTable::new();
         for w in 1..=3u16 {
             assert!(table.register(ip(2), w as _, w as _, w as _, w as _));

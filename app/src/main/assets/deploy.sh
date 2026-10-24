@@ -5,22 +5,65 @@ set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export TERM="${TERM:-xterm}"
 
-readonly SCRIPT_VERSION="2.5.0"
-readonly LOG_FILE="/var/log/csqtt-install.log"
-readonly PEER_PORT="${CSQTT_PEER_PORT:-46000}"
+readonly SCRIPT_VERSION="2.5.2"
+
+# Which server this run installs (the app picks it after `inventory`). main = the standard place: the stock layout (csqtt1,
+# /etc/csqtt, csqtt.service) — install, update, or replace what runs there. side = a second, independent server (csqtt25)
+# next to an older stock one. A stock 2.1.9
+# deploy.sh finds "any csqtt" by SUBSTRINGS (unit text matching /usr/local/bin/csqtt or /usr/local/lib/csqtt/, rule comments
+# containing CSQTT_MANAGED, containers mounting :/etc/csqtt or running /usr/local/bin/csqtt, …) and destroys what it finds on
+# every redeploy/uninstall — so every side name below is out of reach of those patterns, and this script's own matchers
+# (which are the same as 2.1.9's in main mode) cannot see the side server either.
+readonly CSQTT_ROLE="${CSQTT_INSTANCE:-main}"
+case "$CSQTT_ROLE" in
+    main)
+        _name=csqtt; _iface=csqtt1; _net=10.66.67; _net6=fd66:67; _tag=CSQTT_MANAGED
+        _bin=/usr/local/bin/csqtt; _lib=/usr/local/lib/csqtt; _conf=/etc/csqtt
+        _img_bin=/usr/local/bin/csqtt; _img_lib=/usr/local/lib/csqtt; _img_conf=/etc/csqtt
+        _peer=46000; _web=46002
+        _le_helper=/usr/local/lib/csqtt-letsencrypt-renew.sh; _le_venv=/opt/csqtt-certbot; _le_before=259200; _le_every=24h
+        ;;
+    side)
+        _name=csqtt25; _iface=csqtt25; _net=10.66.68; _net6=fd66:68; _tag=CSQTT25_MANAGED
+        _bin=/usr/local/lib/csqtt25/csqtt25; _lib=/usr/local/lib/csqtt25; _conf=/etc/csqtt25
+        _img_bin=/opt/csqtt25/csqtt25; _img_lib=/opt/csqtt25; _img_conf=/srv/csqtt25
+        _peer=46100; _web=46102
+        # Let's Encrypt: one lineage per IP, shared with the stock server. 2.1.9 renews at < 24 h on a 6 h timer and 2.5 at
+        # < 3 days, so while one of them runs it always renews first and this one only copies live/ (renew helper); alone on
+        # the box it renews itself at < 12 h — 6 h below 2.1.9's 24 h, one of its 6 h timer periods. Own certbot venv: 2.1.9's uninstall deletes /opt/csqtt-certbot.
+        _le_helper=/usr/local/lib/csqtt25/letsencrypt-renew.sh; _le_venv=/opt/csqtt25-certbot; _le_before=43200; _le_every=6h
+        ;;
+    *)
+        printf 'CSQTT_DEPLOY_ERROR|validation|CSQTT_INSTANCE должен быть main или side, получено: %s\n' "$CSQTT_ROLE"
+        exit 2
+        ;;
+esac
+readonly CSQTT_NAME="$_name"                    # systemd unit, Docker container, server --instance
+readonly CSQTT_UNIT="$_name"
+readonly CSQTT_BIN="$_bin"
+readonly CSQTT_LIB_DIR="$_lib"
+readonly CSQTT_IMAGE_BIN="$_img_bin"            # inside the Docker image
+readonly CSQTT_IMAGE_LIB_DIR="$_img_lib"
+readonly CSQTT_IMAGE_CONFIG_DIR="$_img_conf"    # where the container sees its config dir (side: never :/etc/csqtt…)
+readonly CSQTT_SUBNET="${_net}.0/24"
+readonly CSQTT_GATEWAY="${_net}.1"
+readonly CSQTT_SUBNET6="${_net6}::/64"
+readonly LOG_FILE="/var/log/${_name}-install.log"
+readonly PEER_PORT="${CSQTT_PEER_PORT:-$_peer}"
 readonly SSH_PORT="${CSQTT_SSH_PORT:-22}"
-readonly WEB_PORT="${CSQTT_WEB_PORT:-46002}"
+readonly WEB_PORT="${CSQTT_WEB_PORT:-$_web}"
 readonly LE_HTTP_PORT="80"
-readonly LE_RENEW_BEFORE_SECONDS="259200"
+readonly LE_RENEW_BEFORE_SECONDS="$_le_before"
+readonly LE_RENEW_EVERY="$_le_every"
 readonly DEPLOY_MODE="${CSQTT_DEPLOY_MODE:-systemd}"
-readonly CSQTT_IFACE="csqtt1"
-readonly CSQTT_CONFIG_DIR="/etc/csqtt"
-readonly CSQTT_LE_CERTBOT="/opt/csqtt-certbot/bin/certbot"
-readonly CSQTT_LE_VENV="/opt/csqtt-certbot"
+readonly CSQTT_IFACE="$_iface"
+readonly CSQTT_CONFIG_DIR="$_conf"
+readonly CSQTT_LE_CERTBOT="${_le_venv}/bin/certbot"
+readonly CSQTT_LE_VENV="$_le_venv"
 readonly CSQTT_LE_STATE_FILE="${CSQTT_CONFIG_DIR}/letsencrypt-ip.env"
-readonly CSQTT_LE_RENEW_HELPER="/usr/local/lib/csqtt-letsencrypt-renew.sh"
-readonly CSQTT_LE_SERVICE="csqtt-letsencrypt.service"
-readonly CSQTT_LE_TIMER="csqtt-letsencrypt.timer"
+readonly CSQTT_LE_RENEW_HELPER="$_le_helper"
+readonly CSQTT_LE_SERVICE="${_name}-letsencrypt.service"
+readonly CSQTT_LE_TIMER="${_name}-letsencrypt.timer"
 readonly CSQTT_DATABASE_FILE="csqtt.db"
 readonly CSQTT_DATABASE_WAL_FILE="csqtt.db-wal"
 readonly CSQTT_DATABASE_SHM_FILE="csqtt.db-shm"
@@ -32,14 +75,15 @@ readonly CSQTT_RUNTIME_ARCHIVE_DIR="${CSQTT_CONFIG_DIR}/runtime-archive"
 readonly UPLOAD_BINARY="/tmp/.csqtt-upload-server"
 readonly UPLOAD_ENV_FILE="/tmp/.csqtt-upload-web.env"
 readonly UPLOAD_OVERRIDES_FILE="/tmp/.csqtt-upload-overrides.json"
-readonly CSQTT_SYSCTL_FILE="/etc/sysctl.d/99-csqtt.conf"
-readonly CSQTT_UDP_SYSCTL_FILE="/etc/sysctl.d/99-csqtt-udp-buffers.conf"
-readonly IPT_COMMENT="CSQTT_MANAGED"
-readonly CSQTT_DOCKER_IMAGE="csqtt:2.5.0"
-readonly CSQTT_DOCKER_CONTAINER="csqtt"
-readonly CSQTT_DOCKER_PREREQ_SERVICE="csqtt-docker-prereq.service"
-readonly CSQTT_DOCKER_PREREQ_HELPER="/usr/local/lib/csqtt/docker-prereq.sh"
-readonly CSQTT_RUNTIME_DIR="/run/csqtt"
+readonly CSQTT_SYSCTL_FILE="/etc/sysctl.d/99-${_name}.conf"
+readonly CSQTT_UDP_SYSCTL_FILE="/etc/sysctl.d/99-${_name}-udp-buffers.conf"
+readonly IPT_COMMENT="$_tag"
+readonly IPT_TPROXY_COMMENT="${_tag%_MANAGED}_TPROXY"   # the server's own local-proxy rules (server --instance)
+readonly CSQTT_DOCKER_IMAGE="${_name}:${SCRIPT_VERSION}"
+readonly CSQTT_DOCKER_CONTAINER="$_name"
+readonly CSQTT_DOCKER_PREREQ_SERVICE="${_name}-docker-prereq.service"
+readonly CSQTT_DOCKER_PREREQ_HELPER="${_lib}/docker-prereq.sh"
+readonly CSQTT_RUNTIME_DIR="/run/${_name}"
 readonly CSQTT_DOCKER_NETWORK_READY="${CSQTT_RUNTIME_DIR}/docker-network.ready"
 readonly XT_WAIT="${CSQTT_XT_WAIT:-2}"
 readonly START_STABILITY_SECONDS="${CSQTT_START_STABILITY_SECONDS:-4}"
@@ -47,6 +91,16 @@ readonly DOCKER_BUILD_TIMEOUT_SECONDS="${CSQTT_DOCKER_BUILD_TIMEOUT_SECONDS:-180
 readonly EXIT_INVALID_ARGUMENT=2
 readonly EXIT_PREFLIGHT_FAILED=20
 readonly EXIT_CUTOVER_FAILED=30
+
+# The server flags that make the side server a separate instance (server 2.5.2 --instance; all on argv — swg-panel's
+# adoption scan reads the process's command line). None in main mode: its unit stays the stock one.
+if [ "$CSQTT_ROLE" = side ]; then
+    CSQTT_INSTANCE_ARGS=(--instance "$CSQTT_NAME" --iface "$CSQTT_IFACE" --tun-addr "${CSQTT_GATEWAY}/24")
+    CSQTT_ROLE_LABEL=" (второй сервер: ${CSQTT_NAME})"
+else
+    CSQTT_INSTANCE_ARGS=()
+    CSQTT_ROLE_LABEL=""
+fi
 
 SYSTEMD_NEEDS_RELOAD=0
 DEPLOY_PHASE="initial"
@@ -108,15 +162,25 @@ die() {
 csqtt_systemd_unit_exists() {
     command -v systemctl >/dev/null 2>&1 || return 1
     local state
-    state="$(systemctl show --value -p LoadState csqtt 2>/dev/null || true)"
+    state="$(systemctl show --value -p LoadState "$CSQTT_UNIT" 2>/dev/null || true)"
     [ -n "$state" ] && [ "$state" != "not-found" ]
+}
+
+# Does this unit text run THIS server? main: stock's own test (any unit mentioning the stock paths); side: its own
+# directory only — /usr/local/lib/csqtt25/ is not matched by the main test, and the main paths not by this one.
+unit_text_runs_this_csqtt() {
+    if [ "$CSQTT_ROLE" = side ]; then
+        grep -Fq "${CSQTT_LIB_DIR}/"
+    else
+        grep -Eq '(/usr/local/bin/csqtt|/usr/local/lib/csqtt/)'
+    fi
 }
 
 csqtt_systemd_unit_is_managed() {
     csqtt_systemd_unit_exists || return 1
     local unit
-    unit="$(systemctl cat csqtt 2>/dev/null || true)"
-    printf '%s\n' "$unit" | grep -Eq '(/usr/local/bin/csqtt|/usr/local/lib/csqtt/)'
+    unit="$(systemctl cat "$CSQTT_UNIT" 2>/dev/null || true)"
+    printf '%s\n' "$unit" | unit_text_runs_this_csqtt
 }
 
 csqtt_docker_container_exists() {
@@ -127,6 +191,13 @@ docker_container_runs_csqtt() {
     local container="$1" container_id proc pid cgroup executable command_line details
     docker inspect "$container" >/dev/null 2>&1 || return 1
     details="$(docker inspect --format '{{.Name}}|{{.Config.Image}}|{{json .Config.Entrypoint}}|{{json .Config.Cmd}}|{{range .Mounts}}{{.Source}}:{{.Destination}}|{{end}}' "$container" 2>/dev/null || true)"
+    if [ "$CSQTT_ROLE" = side ]; then
+        # its own name, image, in-image binary or config mount — none of which the main patterns below can see
+        case "$details" in
+            *"/${CSQTT_DOCKER_CONTAINER}|"*|*"|${CSQTT_NAME}:"*|*"${CSQTT_IMAGE_BIN}"*|*":${CSQTT_IMAGE_CONFIG_DIR}|"*) return 0 ;;
+        esac
+        return 1
+    fi
     case "$details" in
         *'|csqtt|'*|*'|csqtt:'*|*'|csqtt-docker-'*|*'/usr/local/bin/csqtt'*|*":${CSQTT_CONFIG_DIR}"*) return 0 ;;
     esac
@@ -189,6 +260,16 @@ csqtt_process_is_owned() {
     esac
     [ -r "/proc/$pid/cmdline" ] || return 1
     executable="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+    if [ "$CSQTT_ROLE" = side ]; then
+        case "$executable" in
+            "$CSQTT_BIN"|"$CSQTT_BIN (deleted)"|"$CSQTT_IMAGE_BIN"|"$CSQTT_IMAGE_BIN (deleted)") return 0 ;;
+        esac
+        command_line="$({ tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null || true)"
+        case " $command_line " in
+            *" --config-dir ${CSQTT_CONFIG_DIR} "*|*" --config-dir ${CSQTT_IMAGE_CONFIG_DIR} "*|*" ${CSQTT_BIN} "*|*" ${CSQTT_IMAGE_BIN} "*) return 0 ;;
+        esac
+        return 1
+    fi
     case "$executable" in
         /usr/local/bin/csqtt|'/usr/local/bin/csqtt (deleted)'|/usr/local/lib/csqtt/*|'/usr/local/lib/csqtt/'*' (deleted)') return 0 ;;
     esac
@@ -272,10 +353,103 @@ force_release_peer_port() {
     return 1
 }
 
+# A port held by anything but this server is REFUSED, never killed (side: next to 2.1.9 the holder may be the stock server;
+# main: a server swg-panel or someone else runs there, or an unrelated program — the stock script killed whatever it was).
+pid_is_this_csqtt() {
+    local pid="$1" container
+    csqtt_process_is_owned "$pid" && return 0
+    container="$(docker_container_for_pid "$pid" 2>/dev/null || true)"
+    [ -n "$container" ] && docker_container_runs_csqtt "$container"
+}
+
+# A process's name and binary, for a refusal message.
+describe_pid() {
+    printf '%s (PID %s, %s)' "$(cat "/proc/$1/comm" 2>/dev/null || echo '?')" "$1" "$(readlink "/proc/$1/exe" 2>/dev/null || echo '?')"
+}
+
+refuse_foreign_port_holder() {
+    local proto="$1" port="$2" label="$3" pid holders=""
+    while IFS= read -r pid; do
+        [ -n "$pid" ] || continue
+        pid_is_this_csqtt "$pid" && continue
+        holders="${holders:+$holders, }$(describe_pid "$pid")"
+    done < <(ss -H -l"${proto}"np "sport = :${port}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -un || true)
+    if [ -z "$holders" ] && ss -H -l"${proto}"n "sport = :${port}" 2>/dev/null | grep -q . && \
+       [ -z "$(ss -H -l"${proto}"np "sport = :${port}" 2>/dev/null | grep -oE 'pid=[0-9]+' || true)" ]; then
+        holders="процесс без видимого PID"
+    fi
+    [ -z "$holders" ] || die "${label} ${port} занят: ${holders}. Выберите другой порт («Ручные порты»)" "$EXIT_PREFLIGHT_FAILED"
+}
+
+# PIDs holding the TUN interface $1 open: the kernel names it in the descriptor's fdinfo ("iff:	<name>").
+tun_holder_pids() {
+    local name="$1" fd
+    { find /proc/[0-9]*/fd -lname /dev/net/tun 2>/dev/null || true; } | while IFS= read -r fd; do
+        grep -qxE "iff:[[:space:]]*${name}" "${fd%/fd/*}/fdinfo/${fd##*/}" 2>/dev/null || continue
+        fd="${fd#/proc/}"
+        echo "${fd%%/*}"
+    done | sort -un || true
+}
+
+# Holders of this server's interface that are not this server: the live interface of another server (swg-panel names its
+# first csqtt server csqtt1 too). Empty when the interface is free, or a leftover nobody holds (deleted as before).
+foreign_tun_holders() {
+    local pid holders=""
+    while IFS= read -r pid; do
+        [ -n "$pid" ] || continue
+        pid_is_this_csqtt "$pid" && continue
+        holders="${holders:+$holders, }$(describe_pid "$pid")"
+    done < <(tun_holder_pids "$CSQTT_IFACE")
+    printf '%s' "$holders"
+}
+
+# swg-panel's csqtt servers (units swg-csqtt-<iface>, their settings in the unit's EnvironmentFile) that claim this server's
+# interface or UDP port — a STOPPED one too: the panel starts it again later, and its ExecStartPre deletes the interface first.
+panel_units_claiming() {
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local unit iface listen claims=""
+    while IFS= read -r unit; do
+        case "$unit" in swg-csqtt-?*.service) ;; *) continue ;; esac
+        read -r iface listen <<<"$(panel_unit_settings "$unit")"
+        if [ "$iface" = "$CSQTT_IFACE" ] || [ "${listen##*:}" = "$PEER_PORT" ]; then
+            claims="${claims:+$claims, }${unit} (${iface}, ${listen}, $(systemctl is-active "$unit" 2>/dev/null || true))"
+        fi
+    done < <(systemctl list-unit-files 'swg-csqtt-*.service' --no-legend --plain 2>/dev/null | awk '{print $1}' || true)
+    printf '%s' "$claims"
+}
+
+# A swg-panel unit's interface and UDP listen address: its --iface/--listen, overridden by SWG_IFACE/SWG_LISTEN in its
+# EnvironmentFile. Prints "<iface> <listen>", "?" for one it does not name.
+panel_unit_settings() {
+    local text file v iface listen
+    text="$(systemctl cat "$1" 2>/dev/null || true)"
+    iface="$(printf '%s\n' "$text" | grep -oE -- '--iface [^ $]+' | tail -n1 | cut -d' ' -f2 || true)"
+    listen="$(printf '%s\n' "$text" | grep -oE -- '--listen [^ $]+' | tail -n1 | cut -d' ' -f2 || true)"
+    while IFS= read -r file; do
+        file="${file#-}"
+        [ -f "$file" ] || continue
+        v="$(sed -n 's/^SWG_IFACE=//p' "$file" | tail -n1 || true)"; [ -z "$v" ] || iface="$v"
+        v="$(sed -n 's/^SWG_LISTEN=//p' "$file" | tail -n1 || true)"; [ -z "$v" ] || listen="$v"
+    done < <(printf '%s\n' "$text" | sed -n 's/^EnvironmentFile=//p' || true)
+    printf '%s %s' "${iface:-?}" "${listen:-?}"
+}
+
+# Both modes replace only what this app installed. Another server on this interface or port is refused before anything is
+# stopped: the stock script deleted its live interface as "leftover" and killed whatever held the port, and the two servers
+# then took the interface from each other at every restart (seen on a VM with swg-panel's csqtt1).
+refuse_anothers_server() {
+    local holders claims
+    claims="$(panel_units_claiming)"
+    [ -z "$claims" ] || die "Интерфейс ${CSQTT_IFACE} или UDP-порт ${PEER_PORT} занят сервером swg-panel: ${claims}. Этот сервер установлен не приложением — обновляйте его в панели" "$EXIT_PREFLIGHT_FAILED"
+    holders="$(foreign_tun_holders)"
+    [ -z "$holders" ] || die "Интерфейс ${CSQTT_IFACE} занят другим сервером: ${holders}. Он установлен не этим приложением — обновляйте его там, откуда он установлен" "$EXIT_PREFLIGHT_FAILED"
+}
+
 assert_peer_port_is_available() {
     local listeners
     listeners="$(peer_port_listeners)"
     [ -z "$listeners" ] && return 0
+    [ "$CSQTT_ROLE" = side ] && refuse_foreign_port_holder u "$PEER_PORT" "UDP-порт"
     log_warn "UDP/${PEER_PORT} занят; выполняется принудительное освобождение"
     force_release_peer_port || die "Не удалось принудительно освободить UDP/${PEER_PORT}"
     [ -z "$(peer_port_listeners)" ] || die "UDP/${PEER_PORT} остался занят после принудительной очистки"
@@ -288,7 +462,7 @@ archive_csqtt_docker_state() {
     archive_dir="${CSQTT_RUNTIME_ARCHIVE_DIR}/docker-${container_id:0:12}-$(date +%s)"
     umask 077
     mkdir -p "$archive_dir" || die "Не удалось подготовить архив состояния Docker CSQTT"
-    for source in /etc/csqtt/csqtt.db /etc/csqtt/csqtt.db-wal /etc/csqtt/csqtt.db-shm /etc/csqtt/passwords.json /etc/csqtt/passwords.json.imported; do
+    for source in "$CSQTT_IMAGE_CONFIG_DIR"/csqtt.db "$CSQTT_IMAGE_CONFIG_DIR"/csqtt.db-wal "$CSQTT_IMAGE_CONFIG_DIR"/csqtt.db-shm "$CSQTT_IMAGE_CONFIG_DIR"/passwords.json "$CSQTT_IMAGE_CONFIG_DIR"/passwords.json.imported; do
         base="${source##*/}"
         if docker cp "${container}:${source}" "${archive_dir}/${base}" >/dev/null 2>&1; then
             chmod 600 "${archive_dir}/${base}" 2>/dev/null || true
@@ -336,7 +510,7 @@ remove_all_csqtt_docker_containers() {
 systemd_unit_runs_csqtt() {
     local unit="$1" content
     content="$(systemctl cat "$unit" 2>/dev/null || true)"
-    if printf '%s\n' "$content" | grep -Eq '(/usr/local/bin/csqtt|/usr/local/lib/csqtt/)'; then
+    if printf '%s\n' "$content" | unit_text_runs_this_csqtt; then
         return 0
     fi
     return 1
@@ -621,7 +795,7 @@ EOF
 is_ignored_wan_interface() {
     local iface="${1%%@*}"
     case "$iface" in
-        ""|lo|"$CSQTT_IFACE"|csqtp*|tun*|tap*|wg*|warp*|Warp*|WARP*|CloudflareWARP*|tailscale*|zt*|docker*|br-*|veth*|cni*|flannel*|virbr*|podman*|kube*|dummy*|ifb*)
+        ""|lo|"$CSQTT_IFACE"|csqtt*|csqtp*|tun*|tap*|wg*|warp*|Warp*|WARP*|CloudflareWARP*|tailscale*|zt*|docker*|br-*|veth*|cni*|flannel*|virbr*|podman*|kube*|dummy*|ifb*)
             return 0
             ;;
     esac
@@ -658,7 +832,7 @@ fw_add_input_tcp() {
 }
 
 fw_add_forward() {
-    ipt_add_or_ensure filter INPUT -i "$CSQTT_IFACE" -s "10.66.67.0/24" -m comment --comment "$IPT_COMMENT" -j ACCEPT || \
+    ipt_add_or_ensure filter INPUT -i "$CSQTT_IFACE" -s "$CSQTT_SUBNET" -m comment --comment "$IPT_COMMENT" -j ACCEPT || \
         die "Не удалось установить INPUT -i $CSQTT_IFACE"
     ipt_add_or_ensure filter FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || true
     ipt_add_or_ensure filter FORWARD -i "$CSQTT_IFACE" -m comment --comment "$IPT_COMMENT" -j ACCEPT || \
@@ -716,8 +890,13 @@ EOF
 }
 
 cleanup_csqtt_netfilter_rules() {
-    local table chain marker
-    for marker in "$IPT_COMMENT" CSQTT_MIRRORED CSQTT_TPROXY CSQTT_LOCAL_SOCKS CSQTT_LOCAL_SOCKS_MARK CSQTT_SOCKS CSQTT_CASCADE_NO_QUIC; do
+    local table chain marker markers
+    if [ "$CSQTT_ROLE" = side ]; then
+        markers="$IPT_COMMENT $IPT_TPROXY_COMMENT"          # its own two tags; stock's are not superstrings of them
+    else
+        markers="$IPT_COMMENT CSQTT_MIRRORED CSQTT_TPROXY CSQTT_LOCAL_SOCKS CSQTT_LOCAL_SOCKS_MARK CSQTT_SOCKS CSQTT_CASCADE_NO_QUIC"
+    fi
+    for marker in $markers; do
         for table in filter nat mangle; do
             for chain in INPUT FORWARD PREROUTING POSTROUTING OUTPUT; do
                 delete_marked_rules "$table" "$chain" "$marker"
@@ -845,6 +1024,12 @@ remove_csqtt_tun_interface() {
     if ! ip link show "$CSQTT_IFACE" >/dev/null 2>&1; then
         return 0
     fi
+    local foreign
+    foreign="$(foreign_tun_holders)"
+    if [ -n "$foreign" ]; then
+        log_error "TUN-интерфейс $CSQTT_IFACE держит другой сервер (${foreign}) — не удаляется"
+        return 1
+    fi
 
     log_warn "Обнаружен остаточный TUN-интерфейс $CSQTT_IFACE; выполняется восстановление runtime"
     for attempt in 1 2 3 4; do
@@ -874,7 +1059,7 @@ csqtt_cleanup() {
     if csqtt_systemd_unit_is_managed; then
         managed_systemd_unit=1
     fi
-    if [ -e /usr/local/bin/csqtt ] || [ -d /usr/local/lib/csqtt ] || \
+    if [ -e "$CSQTT_BIN" ] || [ -d "$CSQTT_LIB_DIR" ] || \
        [ "$managed_systemd_unit" -eq 1 ] || csqtt_docker_container_exists || \
        csqtt_persistent_state_exists || ip link show "$CSQTT_IFACE" >/dev/null 2>&1 || \
        csqtt_peer_port_is_owned; then
@@ -898,13 +1083,13 @@ csqtt_cleanup() {
         systemctl daemon-reload || die "systemctl daemon-reload завершился ошибкой после удаления старого runtime"
         SYSTEMD_NEEDS_RELOAD=0
     fi
-    rm -f /usr/local/bin/csqtt
-    rm -rf /usr/local/lib/csqtt
+    rm -f "$CSQTT_BIN"
+    rm -rf "$CSQTT_LIB_DIR"
     clear_runtime_config_preserving_database
 
     assert_peer_port_is_available
 
-    cleanup_legacy_proxy_interfaces
+    [ "$CSQTT_ROLE" = side ] || cleanup_legacy_proxy_interfaces
     remove_csqtt_tun_interface || die "Не удалось освободить TUN-интерфейс $CSQTT_IFACE; переключение отменено"
     if [ "$had_old_install" -eq 1 ]; then
         cleanup_csqtt_netfilter_rules || true
@@ -976,15 +1161,10 @@ SYSEOF
     echo "✓ Sysctl настроен (IPv4/IPv6 forwarding + BBR + буферы)"
 }
 
-tune_cpu_mitigations() {
-    if [ -f /etc/default/grub ]; then
-        if ! grep -q "mitigations=off" /etc/default/grub; then
-            sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 mitigations=off nowatchdog/' /etc/default/grub 2>/dev/null || true
-            update-grub >>"$LOG_FILE" 2>&1 || grub2-mkconfig -o /boot/grub2/grub.cfg >>"$LOG_FILE" 2>&1 || true
-            log_info "Оптимизация CPU: mitigations=off добавлено в GRUB"
-        fi
-    fi
-}
+# 2.5.0 added "mitigations=off nowatchdog" to the GRUB kernel command line here: it switched the kernel's CPU-vulnerability
+# protections off from the next reboot, uninstall never put them back, and the server does not depend on it (2.1.9 never
+# did it; the gain was never measured). Dropped in 2.5.2 — a VPN install does not decide the host kernel's security.
+# A box that already has the flag keeps it: nothing here edits GRUB.
 
 setup_nat_and_firewall() {
     prog 0.40 "NAT + Firewall..."
@@ -994,7 +1174,7 @@ setup_nat_and_firewall() {
     iface=$(detect_wan_interface)
 
     if [ -z "$iface" ]; then
-        die "Не удалось определить WAN-интерфейс для NAT подсети 10.66.67.0/24"
+        die "Не удалось определить WAN-интерфейс для NAT подсети $CSQTT_SUBNET"
     fi
     ip link show "$iface" >/dev/null 2>&1 || die "Определённый WAN-интерфейс $iface не существует"
 
@@ -1003,7 +1183,9 @@ setup_nat_and_firewall() {
     sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=0" >>"$LOG_FILE" 2>&1 || true
     sysctl -w "net.ipv6.conf.${iface}.accept_ra=2" >>"$LOG_FILE" 2>&1 || true
     sysctl -w "net.ipv6.conf.${iface}.forwarding=1" >>"$LOG_FILE" 2>&1 || true
-    command -v netplan >/dev/null 2>&1 && netplan apply >>"$LOG_FILE" 2>&1 || true
+    # 2.5.0 ran `netplan apply` here. It re-applies the whole network configuration mid-install (the uplink can drop, and on a
+    # box running other software networkd may remove routes it did not configure), and on a netplan box it undoes the line
+    # above: networkd resets accept_ra on the links it manages. The server is IPv4-only; 2.1.9 never did it. Dropped in 2.5.2.
 
     local gw_ip
     gw_ip="$(ip -4 route show default 2>/dev/null | awk '/default/ {for(i=1;i<=NF;i++) if($i=="via") {print $(i+1); break}}')"
@@ -1017,11 +1199,11 @@ setup_nat_and_firewall() {
 
     fw_add_forward
 
-    fw_add_masquerade "$iface" "10.66.67.0/24"
+    fw_add_masquerade "$iface" "$CSQTT_SUBNET"
     
-    fw_add_mss_clamping "10.66.67.0/24"
+    fw_add_mss_clamping "$CSQTT_SUBNET"
 
-    echo "✓ NAT: MASQUERADE на $iface для 10.66.67.0/24"
+    echo "✓ NAT: MASQUERADE на $iface для $CSQTT_SUBNET"
     echo "✓ Порты CSQTT: ${PEER_PORT}/udp(PEER), ${WEB_PORT}/tcp(WEB), ${LE_HTTP_PORT}/tcp(LE)"
     echo "✓ TCP MSS Clamping включен"
 }
@@ -1036,8 +1218,8 @@ WEB_PORT="$WEB_PORT"
 LE_HTTP_PORT="$LE_HTTP_PORT"
 CSQTT_IFACE="$CSQTT_IFACE"
 IPT_COMMENT="$IPT_COMMENT"
-SUBNET="10.66.67.0/24"
-SUBNET6="fd66:67::/64"
+SUBNET="$CSQTT_SUBNET"
+SUBNET6="$CSQTT_SUBNET6"
 XT_WAIT="$XT_WAIT"
 CSQTT_RUNTIME_DIR="$CSQTT_RUNTIME_DIR"
 NETWORK_READY_FILE="$CSQTT_DOCKER_NETWORK_READY"
@@ -1053,7 +1235,7 @@ command -v iptables >/dev/null 2>&1 || exit 21
 is_ignored_wan_interface() {
     ignored_iface="\${1%%@*}"
     case "\$ignored_iface" in
-        ""|lo|"\$CSQTT_IFACE"|csqtp*|tun*|tap*|wg*|warp*|Warp*|WARP*|CloudflareWARP*|tailscale*|zt*|docker*|br-*|veth*|cni*|flannel*|virbr*|podman*|kube*|dummy*|ifb*)
+        ""|lo|"\$CSQTT_IFACE"|csqtt*|csqtp*|tun*|tap*|wg*|warp*|Warp*|WARP*|CloudflareWARP*|tailscale*|zt*|docker*|br-*|veth*|cni*|flannel*|virbr*|podman*|kube*|dummy*|ifb*)
             return 0
             ;;
     esac
@@ -1161,6 +1343,7 @@ set -eu
 CSQTT_IFACE="$CSQTT_IFACE"
 PEER_PORT="$PEER_PORT"
 CSQTT_CONFIG_DIR="$CSQTT_CONFIG_DIR"
+CSQTT_ROLE="$CSQTT_ROLE"
 
 peer_port_is_busy() {
     ss -H -lun "sport = :\$PEER_PORT" 2>/dev/null | grep -q .
@@ -1174,6 +1357,16 @@ csqtt_process_is_owned() {
     pid="\$1"
     [ -r "/proc/\$pid/cmdline" ] || return 1
     executable="\$(readlink "/proc/\$pid/exe" 2>/dev/null || true)"
+    if [ "\$CSQTT_ROLE" = side ]; then
+        case "\$executable" in
+            "$CSQTT_BIN"|"$CSQTT_BIN (deleted)"|"$CSQTT_IMAGE_BIN"|"$CSQTT_IMAGE_BIN (deleted)") return 0 ;;
+        esac
+        command_line="\$({ tr '\\0' ' ' < "/proc/\$pid/cmdline"; } 2>/dev/null || true)"
+        case " \$command_line " in
+            *" --config-dir $CSQTT_CONFIG_DIR "*|*" --config-dir $CSQTT_IMAGE_CONFIG_DIR "*) return 0 ;;
+        esac
+        return 1
+    fi
     case "\$executable" in
         /usr/local/bin/csqtt|'/usr/local/bin/csqtt (deleted)'|/usr/local/lib/csqtt/*|'/usr/local/lib/csqtt/'*' (deleted)') return 0 ;;
     esac
@@ -1194,6 +1387,12 @@ release_owned_peer_port() {
             return 24
         fi
         for pid in \$pids; do
+            # next to a stock server: only our own stale runtime is ours to stop; anything else holding the port is
+            # refused (the deploy picked a free one), so this start fails loudly instead of killing a neighbour
+            if [ "\$CSQTT_ROLE" = side ] && ! csqtt_process_is_owned "\$pid"; then
+                echo "[CSQTT] UDP/\$PEER_PORT is held by PID \$pid, which is not this server; not touching it" >&2
+                return 24
+            fi
             if [ "\$attempt" -le 2 ]; then
                 echo "[CSQTT] UDP/\$PEER_PORT runtime PID \$pid; terminating" >&2
                 kill -TERM "\$pid" 2>/dev/null || true
@@ -1233,9 +1432,9 @@ RECOVEREOF
 }
 
 install_network_helper() {
-    ensure_csqtt_directory /usr/local/lib/csqtt 755
-    write_network_helper /usr/local/lib/csqtt/network-up.sh
-    write_tun_recovery_helper /usr/local/lib/csqtt/tun-recover.sh
+    ensure_csqtt_directory "$CSQTT_LIB_DIR" 755
+    write_network_helper "$CSQTT_LIB_DIR/network-up.sh"
+    write_tun_recovery_helper "$CSQTT_LIB_DIR/tun-recover.sh"
 }
 
 verify_configured_network() {
@@ -1249,9 +1448,14 @@ setup_csqtt_binary() {
     prog 0.60 "Бинарник..."
     echo "Установка csqtt..."
 
-    install -m 0755 "$UPLOAD_BINARY" /usr/local/bin/csqtt || \
+    mkdir -p "$(dirname "$CSQTT_BIN")"     # never re-chmod an existing /usr/local/bin (Debian: 2775 root:staff)
+    install -m 0755 "$UPLOAD_BINARY" "$CSQTT_BIN" || \
         die "Не удалось установить новый бинарник csqtt"
-    echo "✓ csqtt установлен"
+    echo "✓ csqtt установлен: $CSQTT_BIN"
+    if [ "$CSQTT_ROLE" = side ]; then
+        mkdir -p "$CSQTT_CONFIG_DIR"
+        return 0                                     # the legacy cleanup below is stock's layout, not ours to touch
+    fi
 
     rm -f /usr/local/bin/hev-socks5-tunnel
     echo "✓ SOCKS5-форвардер встроен в csqtt (TPROXY, поднимается при первом использовании)"
@@ -1562,15 +1766,16 @@ generate_rcgen_fallback_certificate() {
 }
 
 write_letsencrypt_renewal_helper() {
-    install -d -m 0755 /usr/local/lib
+    install -d -m 0755 "$(dirname "$CSQTT_LE_RENEW_HELPER")"
     cat > "$CSQTT_LE_RENEW_HELPER" << 'LEHELPER'
 #!/bin/bash
 set -Eeuo pipefail
 
+LE_VENV="${CSQTT_LE_VENV:-/opt/csqtt-certbot}"
 CERTBOT="${CSQTT_LE_CERTBOT:-}"
 if [ -z "$CERTBOT" ] || ! "$CERTBOT" --version >/dev/null 2>&1; then
-    if [ -x /opt/csqtt-certbot/bin/certbot ] && /opt/csqtt-certbot/bin/certbot --version >/dev/null 2>&1; then
-        CERTBOT="/opt/csqtt-certbot/bin/certbot"
+    if [ -x "$LE_VENV/bin/certbot" ] && "$LE_VENV/bin/certbot" --version >/dev/null 2>&1; then
+        CERTBOT="$LE_VENV/bin/certbot"
     elif command -v certbot >/dev/null 2>&1 && certbot --version >/dev/null 2>&1; then
         CERTBOT="$(command -v certbot)"
     fi
@@ -1582,6 +1787,8 @@ KEY_PATH="${CONFIG_DIR}/web_key.pem"
 RENEW_BEFORE_SECONDS="${CSQTT_LE_RENEW_BEFORE_SECONDS:-259200}"
 HTTP_PORT="${CSQTT_LE_HTTP_PORT:-80}"
 SERVICE_MANAGER="${CSQTT_DEPLOY_MODE:-systemd}"
+UNIT_NAME="${CSQTT_UNIT_NAME:-csqtt}"          # the unit / container this certificate belongs to
+COPY_FIRST="${CSQTT_LE_COPY_FIRST:-0}"         # side: take the lineage the neighbour already renewed before renewing it
 
 log() {
     logger -t csqtt-letsencrypt -- "$*" 2>/dev/null || true
@@ -1755,9 +1962,9 @@ install_certificate() {
 
 reload_csqtt_tls() {
     if [ "$SERVICE_MANAGER" = "docker" ]; then
-        docker kill --signal USR1 csqtt >/dev/null 2>&1 || return 0
+        docker kill --signal USR1 "$UNIT_NAME" >/dev/null 2>&1 || return 0
     else
-        systemctl kill --kill-who=main --signal USR1 csqtt >/dev/null 2>&1 || return 0
+        systemctl kill --kill-who=main --signal USR1 "$UNIT_NAME" >/dev/null 2>&1 || return 0
     fi
 }
 
@@ -1777,6 +1984,21 @@ main() {
         log "Let’s Encrypt: публичный IPv4 не определён, обновление отложено"
         fallback_if_expired ""
         return 0
+    fi
+    if [ "$COPY_FIRST" = 1 ]; then
+        # One certificate per IP, shared with the server next to this one: while ITS copy in live/ is still good for
+        # longer than our threshold and differs from ours, take it — a second force-renewal of one lineage only spends
+        # Let's Encrypt's weekly duplicate limit.
+        cert_name="csqtt-ip-${current_ip//./-}"
+        live_cert="/etc/letsencrypt/live/${cert_name}/fullchain.pem"
+        if [ -s "$live_cert" ] && ! cmp -s "$live_cert" "$CERT_PATH" && \
+           openssl x509 -noout -checkend "$RENEW_BEFORE_SECONDS" -in "$live_cert" >/dev/null 2>&1; then
+            if install_certificate "$current_ip" "$cert_name"; then
+                reload_csqtt_tls
+                log "Let’s Encrypt: взят IP-сертификат, обновлённый соседним сервером"
+            fi
+            return 0
+        fi
     fi
     if ! needs_renewal "$current_ip"; then
         return 0
@@ -1825,6 +2047,10 @@ Type=oneshot
 Environment=CSQTT_DEPLOY_MODE=${DEPLOY_MODE}
 Environment=CSQTT_LE_CERTBOT=${LE_CERTBOT_COMMAND}
 Environment=CSQTT_LE_RENEW_BEFORE_SECONDS=${LE_RENEW_BEFORE_SECONDS}
+Environment=CSQTT_CONFIG_DIR=${CSQTT_CONFIG_DIR}
+Environment=CSQTT_LE_VENV=${CSQTT_LE_VENV}
+Environment=CSQTT_UNIT_NAME=${CSQTT_UNIT}
+Environment=CSQTT_LE_COPY_FIRST=$([ "$CSQTT_ROLE" = side ] && echo 1 || echo 0)
 ExecStart=${CSQTT_LE_RENEW_HELPER}
 LEUNIT
     cat > "/etc/systemd/system/${CSQTT_LE_TIMER}" << LETIMER
@@ -1833,7 +2059,7 @@ Description=Check CSQTT Let’s Encrypt IP certificate lifetime
 
 [Timer]
 OnBootSec=5min
-OnUnitInactiveSec=24h
+OnUnitInactiveSec=${LE_RENEW_EVERY}
 RandomizedDelaySec=10min
 Persistent=true
 
@@ -1877,6 +2103,15 @@ setup_letsencrypt_ip_tls() {
         fi
         install_letsencrypt_renewal_timer
         return 0
+    fi
+    if [ "$CSQTT_ROLE" = side ] && ! letsencrypt_certificate_is_current "$public_ip"; then
+        # the server next to this one already holds a certificate for this IP: take it instead of issuing another
+        cert_name="$(letsencrypt_cert_name "$public_ip")"
+        if [ -s "/etc/letsencrypt/live/${cert_name}/fullchain.pem" ] && \
+           openssl x509 -noout -checkend "$LE_RENEW_BEFORE_SECONDS" -in "/etc/letsencrypt/live/${cert_name}/fullchain.pem" >/dev/null 2>&1 && \
+           install_letsencrypt_certificate "$public_ip" "$cert_name"; then
+            log_info "Let’s Encrypt IP-сертификат взят у соседнего сервера (тот же IP)"
+        fi
     fi
     if letsencrypt_certificate_is_current "$public_ip"; then
         log_info "Let’s Encrypt IP-сертификат действителен; перевыпуск не требуется"
@@ -2023,8 +2258,8 @@ install_docker_boot_prerequisite() {
     command -v systemctl >/dev/null 2>&1 || \
         die "Docker-режим требует systemd для подготовки TUN до автозапуска контейнера"
 
-    ensure_csqtt_directory /usr/local/lib/csqtt 755
-    cat > "$CSQTT_DOCKER_PREREQ_HELPER" << 'PREREQ'
+    ensure_csqtt_directory "$CSQTT_LIB_DIR" 755
+    cat > "$CSQTT_DOCKER_PREREQ_HELPER" << PREREQ
 #!/bin/sh
 set -eu
 
@@ -2036,9 +2271,9 @@ fi
 
 [ -c /dev/net/tun ] || exit 20
 chmod 666 /dev/net/tun 2>/dev/null || true
-mkdir -p /run/csqtt
-chmod 0755 /run/csqtt 2>/dev/null || true
-rm -f /run/csqtt/docker-network.ready
+mkdir -p ${CSQTT_RUNTIME_DIR}
+chmod 0755 ${CSQTT_RUNTIME_DIR} 2>/dev/null || true
+rm -f ${CSQTT_DOCKER_NETWORK_READY}
 touch /run/xtables.lock
 chmod 600 /run/xtables.lock 2>/dev/null || true
 PREREQ
@@ -2073,17 +2308,20 @@ PREREQUNIT
 
 write_csqtt_dockerfile() {
     local target="$1"
+    # in-image paths: the stock ones in main mode; /opt/csqtt25 in side mode (stock's container matcher looks for
+    # /usr/local/bin/csqtt in the entrypoint)
     cat > "$target" << 'DOCKERFILE'
 FROM alpine:3.21
 ARG CSQTT_BUILD_DNS_PRIMARY
 ARG CSQTT_BUILD_DNS_SECONDARY
 RUN set -eu; if [ -n "${CSQTT_BUILD_DNS_PRIMARY:-}" ]; then printf 'nameserver %s\n' "$CSQTT_BUILD_DNS_PRIMARY" > /etc/resolv.conf; fi; if [ -n "${CSQTT_BUILD_DNS_SECONDARY:-}" ]; then printf 'nameserver %s\n' "$CSQTT_BUILD_DNS_SECONDARY" >> /etc/resolv.conf; fi; timeout -k 5s 120s apk add --no-cache --no-progress ca-certificates iproute2 iptables; rm -rf /var/cache/apk/*
-COPY csqtt /usr/local/bin/csqtt
-COPY network-up.sh /usr/local/lib/csqtt/network-up.sh
-COPY tun-recover.sh /usr/local/lib/csqtt/tun-recover.sh
-RUN chmod 0755 /usr/local/bin/csqtt /usr/local/lib/csqtt/network-up.sh /usr/local/lib/csqtt/tun-recover.sh
-ENTRYPOINT ["/bin/sh", "-ec", "/usr/local/lib/csqtt/network-up.sh; /usr/local/lib/csqtt/tun-recover.sh; exec /usr/local/bin/csqtt \"$@\"", "--"]
+COPY csqtt @IMG_BIN@
+COPY network-up.sh @IMG_LIB@/network-up.sh
+COPY tun-recover.sh @IMG_LIB@/tun-recover.sh
+RUN chmod 0755 @IMG_BIN@ @IMG_LIB@/network-up.sh @IMG_LIB@/tun-recover.sh
+ENTRYPOINT ["/bin/sh", "-ec", "@IMG_LIB@/network-up.sh; @IMG_LIB@/tun-recover.sh; exec @IMG_BIN@ \"$@\"", "--"]
 DOCKERFILE
+    sed -i "s#@IMG_BIN@#${CSQTT_IMAGE_BIN}#g; s#@IMG_LIB@#${CSQTT_IMAGE_LIB_DIR}#g" "$target"
 }
 
 docker_build_candidate_image() {
@@ -2203,13 +2441,13 @@ start_csqtt_docker() {
         --ulimit nofile=65535:65535 \
         --env-file "$CSQTT_ENV_FILE" \
         --env CSQTT_SERVICE_MANAGER=docker \
-        --volume "$CSQTT_CONFIG_DIR:$CSQTT_CONFIG_DIR" \
+        --volume "$CSQTT_CONFIG_DIR:$CSQTT_IMAGE_CONFIG_DIR" \
         --mount "type=bind,src=${CSQTT_RUNTIME_DIR},dst=${CSQTT_RUNTIME_DIR}" \
         --mount "type=bind,src=/run/xtables.lock,dst=/run/xtables.lock" \
         "$CSQTT_DOCKER_IMAGE" \
         --listen "0.0.0.0:${PEER_PORT}" \
         --web-port "$WEB_PORT" \
-        --config-dir "$CSQTT_CONFIG_DIR" >>"$LOG_FILE" 2>&1 || \
+        --config-dir "$CSQTT_IMAGE_CONFIG_DIR" "${CSQTT_INSTANCE_ARGS[@]}" >>"$LOG_FILE" 2>&1 || \
         die "Не удалось создать Docker-контейнер CSQTT"
 
     local state running main_pid restarts candidate_pid=0 candidate_restarts=0 found=0
@@ -2250,8 +2488,8 @@ start_csqtt_docker() {
     echo ""
     echo "✓ Деплой успешно завершён"
     echo "CSQTT_DEPLOY_OK"
-    echo "   Режим:      Docker"
-    echo "   Бинарник:   /usr/local/bin/csqtt"
+    echo "   Режим:      Docker${CSQTT_ROLE_LABEL}"
+    echo "   Бинарник:   ${CSQTT_IMAGE_BIN} (в образе)"
     echo "   Конфиг:     ${CSQTT_CONFIG_DIR}"
     echo "   Контейнер:  ${CSQTT_DOCKER_CONTAINER}"
     echo "   Образ:      ${CSQTT_DOCKER_IMAGE}"
@@ -2282,9 +2520,9 @@ StartLimitBurst=3
 Type=simple
 EnvironmentFile=-${CSQTT_ENV_FILE}
 Environment=CSQTT_SERVICE_MANAGER=systemd
-ExecStartPre=/usr/local/lib/csqtt/network-up.sh
-ExecStartPre=/usr/local/lib/csqtt/tun-recover.sh
-ExecStart=/usr/local/bin/csqtt --listen 0.0.0.0:${PEER_PORT} --web-port ${WEB_PORT} --config-dir ${CSQTT_CONFIG_DIR}
+ExecStartPre=${CSQTT_LIB_DIR}/network-up.sh
+ExecStartPre=${CSQTT_LIB_DIR}/tun-recover.sh
+ExecStart=${CSQTT_BIN} --listen 0.0.0.0:${PEER_PORT} --web-port ${WEB_PORT} --config-dir ${CSQTT_CONFIG_DIR}${CSQTT_INSTANCE_ARGS[*]:+ ${CSQTT_INSTANCE_ARGS[*]}}
 Restart=on-failure
 RestartSec=3
 KillMode=control-group
@@ -2296,8 +2534,8 @@ Nice=-20
 WantedBy=multi-user.target
 CSQTTSVC
 
-    if [ ! -f /etc/systemd/system/csqtt.service ] || ! cmp -s "$unit_tmp" /etc/systemd/system/csqtt.service; then
-        install -m 0644 "$unit_tmp" /etc/systemd/system/csqtt.service
+    if [ ! -f "/etc/systemd/system/${CSQTT_UNIT}.service" ] || ! cmp -s "$unit_tmp" "/etc/systemd/system/${CSQTT_UNIT}.service"; then
+        install -m 0644 "$unit_tmp" "/etc/systemd/system/${CSQTT_UNIT}.service"
         SYSTEMD_NEEDS_RELOAD=1
     fi
     rm -f "$unit_tmp"
@@ -2308,13 +2546,13 @@ CSQTTSVC
     fi
 
     mkdir -p /etc/systemd/system/multi-user.target.wants
-    ln -sfn /etc/systemd/system/csqtt.service /etc/systemd/system/multi-user.target.wants/csqtt.service
-    echo "✓ Сервис csqtt.service создан и включён"
+    ln -sfn "/etc/systemd/system/${CSQTT_UNIT}.service" "/etc/systemd/system/multi-user.target.wants/${CSQTT_UNIT}.service"
+    echo "✓ Сервис ${CSQTT_UNIT}.service создан и включён"
 }
 
 diagnose_systemd_failure() {
     local props result="unknown" exec_code="unknown" exec_status="unknown" restarts="unknown" active="unknown" sub="unknown" pid="0"
-    props="$(systemctl show csqtt -p Result -p ExecMainCode -p ExecMainStatus -p NRestarts -p ActiveState -p SubState -p MainPID 2>/dev/null || true)"
+    props="$(systemctl show "$CSQTT_UNIT" -p Result -p ExecMainCode -p ExecMainStatus -p NRestarts -p ActiveState -p SubState -p MainPID 2>/dev/null || true)"
     while IFS='=' read -r key value; do
         case "$key" in
             Result) result="$value" ;; ExecMainCode) exec_code="$value" ;; ExecMainStatus) exec_status="$value" ;;
@@ -2322,7 +2560,7 @@ diagnose_systemd_failure() {
         esac
     done <<< "$props"
     log_error "systemd: active=$active/$sub result=$result code=$exec_code status=$exec_status restarts=$restarts pid=$pid"
-    journalctl -u csqtt -b -n 50 --no-pager 2>/dev/null | sed 's/^/   >> /' | tee -a "$LOG_FILE" || true
+    journalctl -u "$CSQTT_UNIT" -b -n 50 --no-pager 2>/dev/null | sed 's/^/   >> /' | tee -a "$LOG_FILE" || true
 }
 
 start_csqtt() {
@@ -2333,13 +2571,13 @@ start_csqtt() {
     prog 0.90 "Запуск..."
     echo "🚀 Запуск CSQTT VPN Server..."
 
-    [ -x /usr/local/bin/csqtt ] || die "Исполняемый файл /usr/local/bin/csqtt не установлен"
+    [ -x "$CSQTT_BIN" ] || die "Исполняемый файл $CSQTT_BIN не установлен"
 
-    if ! systemctl start csqtt; then
-        systemctl reset-failed csqtt >/dev/null 2>&1 || true
-        if ! systemctl start csqtt; then
+    if ! systemctl start "$CSQTT_UNIT"; then
+        systemctl reset-failed "$CSQTT_UNIT" >/dev/null 2>&1 || true
+        if ! systemctl start "$CSQTT_UNIT"; then
             diagnose_systemd_failure
-            die "systemctl start csqtt завершился ошибкой"
+            die "systemctl start $CSQTT_UNIT завершился ошибкой"
         fi
     fi
 
@@ -2348,7 +2586,7 @@ start_csqtt() {
     while [ "$attempts" -lt 48 ]; do
         attempts=$((attempts + 1))
         active=""; sub=""; main_pid=0; restarts=0
-        props="$(systemctl show csqtt -p ActiveState -p SubState -p MainPID -p NRestarts 2>/dev/null || true)"
+        props="$(systemctl show "$CSQTT_UNIT" -p ActiveState -p SubState -p MainPID -p NRestarts 2>/dev/null || true)"
         while IFS='=' read -r key value; do
             case "$key" in
                 ActiveState) active="$value" ;; SubState) sub="$value" ;; MainPID) main_pid="$value" ;; NRestarts) restarts="$value" ;;
@@ -2374,7 +2612,7 @@ start_csqtt() {
 
     sleep "$START_STABILITY_SECONDS"
     active=""; sub=""; main_pid=0; restarts=0
-    props="$(systemctl show csqtt -p ActiveState -p SubState -p MainPID -p NRestarts 2>/dev/null || true)"
+    props="$(systemctl show "$CSQTT_UNIT" -p ActiveState -p SubState -p MainPID -p NRestarts 2>/dev/null || true)"
     while IFS='=' read -r key value; do
         case "$key" in
             ActiveState) active="$value" ;; SubState) sub="$value" ;; MainPID) main_pid="$value" ;; NRestarts) restarts="$value" ;;
@@ -2401,27 +2639,44 @@ start_csqtt() {
     echo "══════════════════════════════════════════════════════════════"
     echo "✓ Деплой успешно завершён"
     echo "CSQTT_DEPLOY_OK"
-    echo "   Режим: systemd"
-    echo "   Бинарник: /usr/local/bin/csqtt"
-    echo "   Unit: /etc/systemd/system/csqtt.service"
+    echo "   Режим: systemd${CSQTT_ROLE_LABEL}"
+    echo "   Бинарник: ${CSQTT_BIN}"
+    echo "   Unit: /etc/systemd/system/${CSQTT_UNIT}.service"
     echo "   Конфиг: ${CSQTT_CONFIG_DIR}"
     echo "   NAT:  MASQUERADE (восстанавливается после reboot)"
     echo "   PEER: порт ${PEER_PORT}"
     echo "   SSH:  порт ${SSH_PORT}"
     echo "   WEB:  порт ${WEB_PORT}"
     echo "   PID:  ${candidate_pid}"
-    echo "   Логи:   journalctl -u csqtt -f"
-    echo "   Статус: systemctl status csqtt"
+    echo "   Логи:   journalctl -u ${CSQTT_UNIT} -f"
+    echo "   Статус: systemctl status ${CSQTT_UNIT}"
     echo "══════════════════════════════════════════════════════════════"
     echo ""
 }
 
+# Is anything of THIS instance installed? The uninstall used to report success on a box without it — «Удалить» in
+# A side uninstall on a box that has only the stock server said "removed" and removed nothing.
+csqtt_instance_installed() {
+    [ -e "$CSQTT_BIN" ] || [ -d "$CSQTT_LIB_DIR" ] || csqtt_systemd_unit_exists || csqtt_docker_container_exists || \
+        ip link show "$CSQTT_IFACE" >/dev/null 2>&1 || [ -e "/etc/systemd/system/${CSQTT_LE_TIMER}" ]
+}
+
 do_uninstall() {
     log_step "Удаление CSQTT..."
+    csqtt_instance_installed || die "Сервер ${CSQTT_NAME} на этом VPS не установлен — удалять нечего"
+    if [ "$CSQTT_ROLE" = main ]; then
+        # this removal's cleanup stops, kills and deletes every csqtt unit, container and process it matches
+        local strangers
+        strangers="$(main_place_strangers | cut -d'|' -f2 | paste -sd ',' - | sed 's/,/, /g' || true)"
+        [ -z "$strangers" ] || die "Здесь работает ещё один сервер csqtt, установленный не этим приложением: ${strangers}. Удаление стандартного сервера остановило бы и удалило его — отменено" "$EXIT_PREFLIGHT_FAILED"
+    fi
 
     remove_all_csqtt_docker_containers
     if command -v docker >/dev/null 2>&1; then
-        timeout 5 docker image rm "$CSQTT_DOCKER_IMAGE" >/dev/null 2>&1 || true
+        # every tag of this instance's image, not only this version's (a 2.5.0 image stayed behind a 2.5.2 upgrade)
+        docker images --format '{{.Repository}}:{{.Tag}}' "$CSQTT_NAME" 2>/dev/null | while IFS= read -r image; do
+            timeout 5 docker image rm "$image" >/dev/null 2>&1 || true
+        done || true
     fi
 
     if command -v systemctl >/dev/null 2>&1; then
@@ -2438,18 +2693,22 @@ do_uninstall() {
     rm -f "/etc/systemd/system/${CSQTT_LE_SERVICE}" "/etc/systemd/system/${CSQTT_LE_TIMER}" /etc/cron.d/csqtt-letsencrypt
     command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1 || true
 
-    cleanup_legacy_proxy_interfaces
+    [ "$CSQTT_ROLE" = side ] || cleanup_legacy_proxy_interfaces
     remove_csqtt_tun_interface || log_warn "Не удалось удалить TUN-интерфейс $CSQTT_IFACE во время uninstall"
     cleanup_csqtt_netfilter_rules || true
 
-    rm -f /usr/local/bin/csqtt /usr/local/bin/csqtt-cascade "$CSQTT_LE_RENEW_HELPER"
-    rm -f /usr/local/bin/hev-socks5-tunnel /usr/local/bin/hev-socks5-server
-    rm -rf /run/csqtt /usr/local/lib/csqtt /var/lib/csqtt /opt/csqtt-certbot
+    rm -f "$CSQTT_BIN" "$CSQTT_LE_RENEW_HELPER"
+    rm -rf "$CSQTT_RUNTIME_DIR" "$CSQTT_LIB_DIR" "$CSQTT_LE_VENV"
+    if [ "$CSQTT_ROLE" = main ]; then
+        rm -f /usr/local/bin/csqtt-cascade /usr/local/bin/hev-socks5-tunnel /usr/local/bin/hev-socks5-server
+        rm -rf /var/lib/csqtt
+    fi
     secure_persistent_state
     rm -f "$CSQTT_SYSCTL_FILE" "$CSQTT_UDP_SYSCTL_FILE"
     sysctl --system >/dev/null 2>&1 || true
 
-    log_info "CSQTT удалён. SQLite state и конфигурация сохранены в ${CSQTT_CONFIG_DIR}"
+    log_info "CSQTT${CSQTT_ROLE_LABEL} удалён. SQLite state и конфигурация сохранены в ${CSQTT_CONFIG_DIR}"
+    echo "CSQTT_UNINSTALL_OK"
 }
 
 do_status() {
@@ -2462,12 +2721,12 @@ do_status() {
             log_warn "Docker-контейнер: НЕ АКТИВЕН"
         fi
     fi
-    if command -v systemctl >/dev/null 2>&1 && systemctl is-active csqtt &>/dev/null; then
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active "$CSQTT_UNIT" &>/dev/null; then
         log_info "Сервис: АКТИВЕН"
     else
         log_warn "Сервис: НЕ АКТИВЕН"
     fi
-    if [ -f /usr/local/bin/csqtt ]; then
+    if [ -f "$CSQTT_BIN" ]; then
         log_info "Бинарник: установлен"
     else
         log_warn "Бинарник: НЕ найден"
@@ -2477,6 +2736,264 @@ do_status() {
     else
         log_warn "CSQTT интерфейс ($CSQTT_IFACE): не активен"
     fi
+}
+
+# The version of the STOCK-layout server on this box (csqtt.service / container csqtt / /usr/local/bin/csqtt), read from the
+# label its web panel compiles in — never by running it. Empty when there is none or it carries no label.
+main_install_csqtt_version() {
+    local pid="" exe=""
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet csqtt 2>/dev/null; then
+        pid="$(systemctl show --value -p MainPID csqtt 2>/dev/null || true)"
+    fi
+    if { [ -z "$pid" ] || [ "$pid" = 0 ]; } && command -v docker >/dev/null 2>&1 && docker inspect csqtt >/dev/null 2>&1; then
+        pid="$(docker inspect --format '{{.State.Pid}}' csqtt 2>/dev/null || true)"
+    fi
+    if [ -n "$pid" ] && [ "$pid" != 0 ] && [ -e "/proc/$pid/exe" ]; then
+        exe="/proc/$pid/exe"
+    elif [ -f /usr/local/bin/csqtt ] && { [ "$(systemctl show --value -p LoadState csqtt 2>/dev/null || true)" = loaded ] || \
+            { command -v docker >/dev/null 2>&1 && docker inspect csqtt >/dev/null 2>&1; }; }; then
+        exe=/usr/local/bin/csqtt
+    else
+        return 0
+    fi
+    binary_version_label "$exe"
+}
+
+# The version label a csqtt binary compiles into its web panel (2.1.9 and 2.5.x carry one); empty without it.
+binary_version_label() {
+    { grep -a -o -m1 -E 'aria-label="v[0-9][^"]{0,30} by amurcanov"' "$1" 2>/dev/null || true; } | head -n 1 | \
+        sed -E 's/^aria-label="v([^ "]*) by amurcanov"$/\1/'
+}
+
+# ---- The server check the app runs before it offers anything (deploy-check-first-design.md §1–§2) ----
+# `deploy.sh inventory`: read-only — installs, stops and writes nothing. One CSQTT_INV line per finding; the app trusts the
+# result only after CSQTT_INV|end.
+
+# The standard place's own units (2.1.9's cascade helper /usr/local/bin/csqtt-cascade matches the stock pattern too).
+readonly STANDARD_PLACE_UNITS="csqtt.service csqtt-cascade.service csqtt-letsencrypt.service csqtt-docker-prereq.service"
+
+# "<udp> <web>" from a server command line (--listen HOST:PORT, --web-port PORT); an absent flag is the server's own
+# default, 46000 / 46002.
+server_ports_in() {
+    local listen web
+    listen="$(grep -oE -- '--listen[= ][^ "]+' <<<"$1" | tail -n1 | sed -E 's/.*://' || true)"
+    web="$(grep -oE -- '--web-port[= ][0-9]+' <<<"$1" | tail -n1 | grep -oE '[0-9]+$' || true)"
+    case "$listen" in ''|*[!0-9]*) listen=46000 ;; esac
+    case "$web" in ''|*[!0-9]*) web=46002 ;; esac
+    printf '%s %s' "$listen" "$web"
+}
+
+pid_args() { { tr '\0' ' ' < "/proc/$1/cmdline"; } 2>/dev/null || true; }
+
+# Running for the purpose of "is it someone's live server": active, or activating — a unit between crash restarts
+# ("activating (auto-restart)") is a running server, not a stopped leftover.
+unit_live() {
+    case "$(systemctl show --value -p ActiveState "$1" 2>/dev/null || true)" in
+        active|activating|reloading) return 0 ;;
+    esac
+    return 1
+}
+
+docker_id() { command -v docker >/dev/null 2>&1 && docker inspect --format '{{.Id}}' "$1" 2>/dev/null || true; }
+
+# Is PID $1 in one of these units or containers? By cgroup: a hand-made server runs the same /usr/local/bin/csqtt, only
+# from its own unit or container. $2: unit names, $3: container ids (space-separated).
+pid_in_cgroups() {
+    local cg u
+    cg="$(cat "/proc/$1/cgroup" 2>/dev/null || true)"
+    for u in $2; do case "$cg" in *"/$u"*) return 0 ;; esac; done
+    for u in $3; do case "$cg" in *"$u"*) return 0 ;; esac; done
+    return 1
+}
+
+# What main mode's cleanup would stop, kill or delete that is not the standard place: a RUNNING unit with the stock paths
+# outside its units, a running container other than csqtt/csqtt25 that runs /usr/local/bin/csqtt, a stock-binary process
+# outside all of those. "<runtime>|<name>|<pid>" per line. Main role only (the side matchers see none of these).
+main_place_strangers() {
+    local unit c pid known_ids strange_units="" strange_ids=""
+    known_ids="$(docker_id csqtt) $(docker_id csqtt25)"
+    while IFS= read -r unit; do
+        [ -n "$unit" ] || continue
+        case " $STANDARD_PLACE_UNITS " in *" $unit "*) continue ;; esac
+        unit_live "$unit" || continue
+        strange_units="$strange_units $unit"
+        printf 'systemd|%s|%s\n' "$unit" "$(systemctl show --value -p MainPID "$unit" 2>/dev/null || true)"
+    done < <(list_csqtt_systemd_units)
+    if command -v docker >/dev/null 2>&1; then
+        while IFS= read -r c; do
+            case "$c" in ''|csqtt|csqtt25) continue ;; esac
+            docker_container_runs_csqtt "$c" || continue
+            strange_ids="$strange_ids $(docker_id "$c")"
+            printf 'docker|%s|%s\n' "$c" "$(docker inspect --format '{{.State.Pid}}' "$c" 2>/dev/null || true)"
+        done < <(docker ps --format '{{.Names}}' 2>/dev/null || true)
+    fi
+    for pid in $(all_csqtt_process_pids); do
+        pid_in_cgroups "$pid" "$STANDARD_PLACE_UNITS csqtt25.service$strange_units" "$known_ids$strange_ids" && continue
+        printf 'process|%s|%s\n' "$(describe_pid "$pid")" "$pid"
+    done
+    return 0
+}
+
+inv_line() {
+    local out="CSQTT_INV" field
+    for field in "$@"; do out="$out|${field//|/}"; done
+    printf '%s\n' "${out//$'\n'/ }"
+}
+
+# One place's server: a running unit, else a running container, else a stopped unit or container, else what is left.
+inv_place() {
+    local place="$1" unit="$2" ctr="$3" bin="$4" store="$5" text_pattern="$6"
+    local runtime="" state="" name="" pid="" exe="$bin" args="" ver="" text="" image="" unit_ok=0 ctr_ok=0 peer web
+    if command -v systemctl >/dev/null 2>&1 && [ "$(systemctl show --value -p LoadState "$unit" 2>/dev/null || true)" = loaded ]; then
+        text="$(systemctl cat "$unit" 2>/dev/null || true)"
+        grep -Eq "$text_pattern" <<<"$text" && unit_ok=1
+    fi
+    command -v docker >/dev/null 2>&1 && docker inspect "$ctr" >/dev/null 2>&1 && ctr_ok=1
+    if [ "$unit_ok" = 1 ] && systemctl is-active --quiet "$unit" 2>/dev/null; then
+        runtime=systemd; state=running; name="$unit"
+        pid="$(systemctl show --value -p MainPID "$unit" 2>/dev/null || true)"
+    elif [ "$ctr_ok" = 1 ] && [ "$(docker inspect --format '{{.State.Running}}' "$ctr" 2>/dev/null || true)" = true ]; then
+        runtime=docker; state=running; name="$ctr"
+        pid="$(docker inspect --format '{{.State.Pid}}' "$ctr" 2>/dev/null || true)"
+    elif [ "$unit_ok" = 1 ]; then
+        runtime=systemd; state=stopped; name="$unit"
+        args="$(sed -n 's/^ExecStart=//p' <<<"$text" | tail -n1 || true)"
+    elif [ "$ctr_ok" = 1 ]; then
+        runtime=docker; state=stopped; name="$ctr"
+        args="$(docker inspect --format '{{.Path}} {{join .Args " "}}' "$ctr" 2>/dev/null || true)"
+    elif [ -e "$bin" ] || [ -f "$store/$CSQTT_DATABASE_FILE" ] || [ -f "$store/csqtt.env" ]; then
+        runtime=none; state=leftover; name="$bin"; [ -e "$bin" ] || name="$store"
+    else
+        return 0
+    fi
+    if [ -n "$pid" ] && [ "$pid" != 0 ] && [ -e "/proc/$pid/exe" ]; then
+        exe="/proc/$pid/exe"; args="$(pid_args "$pid")"
+    fi
+    ver="$(binary_version_label "$exe")"
+    if [ -z "$ver" ] && [ "$runtime" = docker ]; then
+        # a stopped container's binary lives in its image, tagged with the version (csqtt:2.5.0)
+        image="$(docker inspect --format '{{.Config.Image}}' "$ctr" 2>/dev/null || true)"
+        case "${image##*:}" in [0-9]*) ver="${image##*:}" ;; esac
+    fi
+    read -r peer web <<<"$(server_ports_in "$args")"
+    inv_line server "place=$place" "runtime=$runtime" "state=$state" "version=${ver:-?}" "peer=$peer" "web=$web" "name=$name"
+}
+
+do_inventory() {
+    [ "$CSQTT_ROLE" = main ] || die "inventory запускается без CSQTT_INSTANCE"
+    local runtime name pid unit iface listen exe ver peer web spec proto port holders args
+    inv_place standard csqtt.service csqtt /usr/local/bin/csqtt /etc/csqtt '(/usr/local/bin/csqtt|/usr/local/lib/csqtt/)'
+    inv_place side csqtt25.service csqtt25 /usr/local/lib/csqtt25/csqtt25 /etc/csqtt25 '/usr/local/lib/csqtt25/'
+    if command -v systemctl >/dev/null 2>&1; then
+        while IFS= read -r unit; do
+            case "$unit" in swg-csqtt-?*.service) ;; *) continue ;; esac
+            read -r iface listen <<<"$(panel_unit_settings "$unit")"
+            exe="$(systemctl show --value -p ExecStart "$unit" 2>/dev/null | grep -oE 'path=[^ ;]+' | head -n1 | cut -d= -f2 || true)"
+            ver="$( [ -n "$exe" ] && binary_version_label "$exe" || true)"
+            inv_line server place=panel runtime=systemd \
+                "state=$(systemctl is-active --quiet "$unit" 2>/dev/null && echo running || echo stopped)" \
+                "version=${ver:-?}" "peer=${listen##*:}" web=? "name=$unit"
+        done < <(systemctl list-unit-files 'swg-csqtt-*.service' --no-legend --plain 2>/dev/null | awk '{print $1}' || true)
+    fi
+    while IFS='|' read -r runtime name pid; do
+        [ -n "$runtime" ] || continue
+        exe=""; [ -n "$pid" ] && [ "$pid" != 0 ] && [ -e "/proc/$pid/exe" ] && exe="/proc/$pid/exe"
+        ver="$( [ -n "$exe" ] && binary_version_label "$exe" || true)"
+        if [ -n "$exe" ]; then
+            args="$(pid_args "$pid")"
+        elif [ "$runtime" = systemd ]; then
+            # between crash restarts there is no process: its unit's command line says the ports
+            args="$(systemctl show --value -p ExecStart "$name" 2>/dev/null | sed -n 's/.*argv\[\]=\([^;]*\);.*/\1/p' | head -n1 || true)"
+        else
+            args=""
+        fi
+        read -r peer web <<<"$(server_ports_in "$args")"
+        inv_line server place=other "runtime=$runtime" state=running "version=${ver:-?}" "peer=$peer" "web=$web" "name=$name"
+    done < <(main_place_strangers)
+    # stopped units with the stock paths outside the standard place's: main mode deletes them as today — named here
+    while IFS= read -r unit; do
+        [ -n "$unit" ] || continue
+        case " $STANDARD_PLACE_UNITS " in *" $unit "*) continue ;; esac
+        unit_live "$unit" && continue
+        read -r peer web <<<"$(server_ports_in "$(systemctl show --value -p ExecStart "$unit" 2>/dev/null | sed -n 's/.*argv\[\]=\([^;]*\);.*/\1/p' | head -n1 || true)")"
+        inv_line server place=leftover runtime=systemd state=stopped version=? "peer=$peer" "web=$web" "name=$unit"
+    done < <(list_csqtt_systemd_units)
+    # stopped containers running the stock binary: the standard place's cleanup removes them too (docker ps -a)
+    if command -v docker >/dev/null 2>&1; then
+        while IFS= read -r name; do
+            case "$name" in ''|csqtt|csqtt25) continue ;; esac
+            docker_container_runs_csqtt "$name" || continue
+            read -r peer web <<<"$(server_ports_in "$(docker inspect --format '{{.Path}} {{join .Args " "}}' "$name" 2>/dev/null || true)")"
+            inv_line server place=leftover runtime=docker state=stopped version=? "peer=$peer" "web=$web" "name=$name"
+        done < <(docker ps -a --filter status=exited --filter status=created --format '{{.Names}}' 2>/dev/null || true)
+    fi
+    # swg-panel's Docker node: its csqtt runs inside the swg-node container from /var/lib/swg-noded
+    for pid in $(grep -l -s -F '/var/lib/swg-noded/' /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 | sort -un || true); do
+        case "$(pid_args "$pid")" in *csqtt*--*) ;; *) continue ;; esac
+        read -r peer web <<<"$(server_ports_in "$(pid_args "$pid")")"
+        inv_line server place=panel runtime=docker state=running "version=$(binary_version_label "/proc/$pid/exe" || true)" \
+            "peer=$peer" web=? "name=swg-node $(cat "/proc/$pid/comm" 2>/dev/null || echo csqtt)"
+    done
+    # the default ports, when something that is not a csqtt server holds them
+    for spec in u:46000 t:46002 u:46100 t:46102; do
+        proto="${spec%%:*}"; port="${spec#*:}"; holders=""
+        while IFS= read -r pid; do
+            [ -n "$pid" ] || continue
+            case "$(readlink "/proc/$pid/exe" 2>/dev/null || true)" in *csqtt*) continue ;; esac
+            holders="${holders:+$holders, }$(describe_pid "$pid")"
+        done < <(ss -H -l"${proto}"np "sport = :${port}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -un || true)
+        if [ -z "$holders" ] && ss -H -l"${proto}"n "sport = :${port}" 2>/dev/null | grep -q . && \
+           [ -z "$(ss -H -l"${proto}"np "sport = :${port}" 2>/dev/null | grep -oE 'pid=[0-9]+' || true)" ]; then
+            holders="процесс без видимого PID"
+        fi
+        [ -z "$holders" ] || inv_line busy "proto=$( [ "$proto" = u ] && echo udp || echo tcp)" "port=$port" "by=$holders"
+    done
+    inv_line end
+}
+
+# Side mode refuses BEFORE anything is stopped or changed: over a 2.5 server (a 2.5.1 user redeploying would otherwise get
+# a second 2.5 server and be moved onto it while their users stay on the first), and on a port someone else holds.
+side_preflight() {
+    local ver
+    ver="$(main_install_csqtt_version || true)"
+    # an existing side server is being UPDATED: allowed whatever runs next to it (a later standard-place deploy may have put 2.5 there)
+    if csqtt_systemd_unit_exists || csqtt_docker_container_exists; then
+        log_info "Обновление ${CSQTT_NAME}"
+    else
+        case "$ver" in
+            ""|0.*|1.*|2.0|2.0.*|2.1|2.1.*) ;;
+            *) die "Здесь уже работает csqtt ${ver} — его можно только обновить. Проверьте сервер заново" "$EXIT_PREFLIGHT_FAILED" ;;
+        esac
+    fi
+    [ -n "$ver" ] && log_info "Рядом работает csqtt ${ver} (csqtt1) — он не затрагивается"
+    refuse_anothers_server
+    refuse_foreign_port_holder u "$PEER_PORT" "UDP-порт"
+    refuse_foreign_port_holder t "$WEB_PORT" "TCP-порт WEB-панели"
+}
+
+# Main mode replaces the stock server (whatever of it holds the ports is stopped, as before) and nothing else: the server
+# next to it (after a side deploy the app's profile keeps the side's ports as "manual", so a later standard-place deploy from it
+# would kill csqtt25), another server on csqtt1 or the port, or any other program. All refused before anything is stopped.
+main_preflight() {
+    local proto port pid exe
+    for proto in u t; do
+        port="$PEER_PORT"; [ "$proto" = t ] && port="$WEB_PORT"
+        while IFS= read -r pid; do
+            [ -n "$pid" ] || continue
+            exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+            case "$exe" in
+                /usr/local/lib/csqtt25/*|/opt/csqtt25/*)
+                    die "Порт ${port} занят вторым сервером (csqtt25). Проверьте сервер заново или укажите другие порты («Ручные порты»)" "$EXIT_PREFLIGHT_FAILED" ;;
+            esac
+        done < <(ss -H -l"${proto}"np "sport = :${port}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -un || true)
+    done
+    refuse_anothers_server
+    refuse_foreign_port_holder u "$PEER_PORT" "UDP-порт"
+    refuse_foreign_port_holder t "$WEB_PORT" "TCP-порт WEB-панели"
+    # a server someone else runs from the stock binary: this mode's cleanup would stop, kill and delete it
+    local strangers
+    strangers="$(main_place_strangers | cut -d'|' -f2 | paste -sd ',' - | sed 's/,/, /g' || true)"
+    [ -z "$strangers" ] || die "Здесь работает ещё один сервер csqtt, установленный не этим приложением: ${strangers}. Установка на стандартное место остановила бы и удалила его — отменено" "$EXIT_PREFLIGHT_FAILED"
 }
 
 handle_unexpected_error() {
@@ -2495,8 +3012,14 @@ handle_unexpected_error() {
 trap 'handle_unexpected_error "$LINENO" "$?"' ERR
 
 main() {
+    if [ "${1:-}" = inventory ]; then
+        check_root
+        do_inventory
+        return 0
+    fi
     echo "╔══════════════════════════════════════════════════════════════╗"
     echo "║       CSQTT VPN Server — Installer v${SCRIPT_VERSION}                    ║"
+    [ "$CSQTT_ROLE" = side ] && echo "║       Второй сервер: ${CSQTT_NAME}"
     echo "║       PEER: ${PEER_PORT}  |  SSH: ${SSH_PORT}  | WEB: ${WEB_PORT}       ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
 
@@ -2528,12 +3051,12 @@ main() {
             detect_os
             run_timed "зависимости" install_prerequisites
             require_runtime_tools
+            if [ "$CSQTT_ROLE" = side ]; then side_preflight; else main_preflight; fi
             if [ "$DEPLOY_MODE" = "docker" ]; then
                 prog 0.12 "Docker..."
                 run_timed "Docker" ensure_docker
             fi
             run_timed "sysctl" setup_sysctl
-            run_timed "CPU mitigations" tune_cpu_mitigations
 
             run_timed "проверка upload" prepare_uploaded_release
             if [ "$DEPLOY_MODE" = "docker" ]; then

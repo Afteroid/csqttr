@@ -21,7 +21,7 @@ import androidx.compose.ui.window.DialogProperties
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun UninstallConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+internal fun UninstallConfirmDialog(title: String, text: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
     var confirmText by remember { mutableStateOf("") }
     val isConfirmed = confirmText.trim().lowercase() == "да"
 
@@ -44,13 +44,13 @@ fun UninstallConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    "Удаление CSQTT с сервера",
+                    title,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.error
                 )
                 Text(
-                    "Будут удалены: бинарник, systemd-сервис, бот, конфигурация CSQTT и только помеченные правила firewall/NAT для CSQTT.\n\nЭто действие необратимо.",
+                    text,
                     style = MaterialTheme.typography.bodySmall,
                     lineHeight = 15.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
