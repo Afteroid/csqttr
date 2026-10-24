@@ -54,6 +54,8 @@ import com.csqtt.client.ui.design.CsqttShapes
 import com.csqtt.client.ui.design.CsqttSizes
 import com.csqtt.client.ui.design.CsqttSpacing
 import com.csqtt.client.ui.design.CsqttTheme
+import com.csqtt.client.ui.utils.TUNNEL_PASSWORD_RULE
+import com.csqtt.client.ui.utils.isValidTunnelPassword
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -129,10 +131,7 @@ internal sealed interface DeployAction {
 internal fun passwordToSynchronizeAfterDeploy(deploySucceeded: Boolean, mainPassword: String): String? =
     mainPassword.takeIf { deploySucceeded && it.isNotBlank() }
 
-private val DEPLOY_MAIN_PASSWORD_REGEX = Regex("^[a-zA-Z0-9]{16}$")
-
-internal fun isDeployMainPasswordValid(password: String): Boolean =
-    password.length == 16 && password.matches(DEPLOY_MAIN_PASSWORD_REGEX)
+internal fun isDeployMainPasswordValid(password: String): Boolean = isValidTunnelPassword(password)
 
 internal fun isValidPort(value: String): Boolean = value.toIntOrNull() in 1..65535
 
@@ -476,7 +475,7 @@ internal fun DeployTab(
                         startDeploy()
                     } else {
                         if (!state.mainPasswordConfigured) {
-                            scope.launch { snackbarHostState.showSnackbar("Пароль туннеля должен содержать ровно 16 символов [0-9A-Za-z]") }
+                            scope.launch { snackbarHostState.showSnackbar("Пароль туннеля: $TUNNEL_PASSWORD_RULE") }
                         } else if (!state.webPanelConfigured) {
                             scope.launch { snackbarHostState.showSnackbar("Укажите логин и пароль web-панели в разделе «Авторизация»") }
                         } else if (!state.sshAuthReady) {
