@@ -87,9 +87,9 @@ class DeployScriptPreflightTest {
         val deploy = script()
         assertTrue(deploy.contains("ensure_csqtt_directory()"))
         assertTrue(deploy.contains("rm -rf -- \"\$path\" || die \"Не удалось очистить путь CSQTT: \$path\""))
-        assertTrue(deploy.contains("ensure_persistent_directory \"\$CSQTT_CONFIG_DIR\" 700"))
+        assertTrue(deploy.contains("ensure_csqtt_directory \"\$CSQTT_CONFIG_DIR\" 700"))
         assertTrue(deploy.contains("ensure_csqtt_directory /usr/local/lib/csqtt 755"))
-        assertTrue(deploy.contains("setup_csqtt_environment() {\n    ensure_persistent_directory \"\$CSQTT_CONFIG_DIR\" 700"))
+        assertTrue(deploy.contains("setup_csqtt_environment() {\n    ensure_csqtt_directory \"\$CSQTT_CONFIG_DIR\" 700"))
         assertTrue(deploy.contains("install -m 0600 \"\$UPLOAD_ENV_FILE\" \"\$CSQTT_ENV_FILE\""))
     }
 
@@ -100,7 +100,7 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("readonly CSQTT_DATABASE_WAL_FILE=\"csqtt.db-wal\""))
         assertTrue(deploy.contains("readonly CSQTT_DATABASE_SHM_FILE=\"csqtt.db-shm\""))
         assertTrue(deploy.contains("clear_runtime_config_preserving_database"))
-        assertTrue(deploy.contains("\"\$CSQTT_DATABASE_FILE\"|\"\$CSQTT_DATABASE_WAL_FILE\"|\"\$CSQTT_DATABASE_SHM_FILE\"|\"\$CSQTT_LEGACY_MIGRATION_JSON\"|\"\$CSQTT_LEGACY_MIGRATION_IMPORTED_JSON\"|web_cert.pem|web_key.pem|letsencrypt-ip.env|letsencrypt.env|runtime-archive) continue"))
+        assertTrue(deploy.contains("\"\$CSQTT_DATABASE_FILE\"|\"\$CSQTT_DATABASE_WAL_FILE\"|\"\$CSQTT_DATABASE_SHM_FILE\"|\"\$CSQTT_LEGACY_MIGRATION_JSON\"|\"\$CSQTT_LEGACY_MIGRATION_IMPORTED_JSON\"|web_cert.pem|web_key.pem|letsencrypt-ip.env|runtime-archive) continue"))
         assertFalse(deploy.contains("find \"\$CSQTT_CONFIG_DIR\" -mindepth 1 -maxdepth 1"))
     }
 
@@ -262,7 +262,7 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("openssl x509 -noout -checkend \"\$LE_RENEW_BEFORE_SECONDS\""))
         assertTrue(deploy.contains("OnUnitInactiveSec=24h") || deploy.contains("OnUnitInactiveSec=1h"))
         assertTrue(deploy.contains("fw_add_input_tcp \"\$LE_HTTP_PORT\""))
-        assertTrue(deploy.contains("web_cert.pem|web_key.pem|letsencrypt-ip.env|letsencrypt.env|runtime-archive"))
+        assertTrue(deploy.contains("web_cert.pem|web_key.pem|letsencrypt-ip.env"))
         assertTrue(deploy.contains("systemctl kill --kill-who=main --signal USR1 csqtt"))
         assertTrue(deploy.contains("docker kill --signal USR1 csqtt"))
         assertTrue(deploy.contains("issuer=\"\${issuer#issuer=}\""))
@@ -285,88 +285,9 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("web_certificate_is_user_managed()"))
         assertTrue(deploy.contains("CN=rcgen self signed cert"))
         assertTrue(deploy.contains("O=Let's Encrypt"))
-        assertTrue(deploy.contains("IP Address:\${identifier}"))
-        assertTrue(deploy.contains("DNS:\${identifier}"))
+        assertTrue(deploy.contains("IP Address:\${saved_ip}"))
         assertTrue(deploy.contains("rm -f -- \"\$CSQTT_LE_STATE_FILE\""))
         assertTrue(deploy.contains("disable_letsencrypt_renewal_timer"))
         assertTrue(deploy.contains("CSQTT не изменяет его и отключает собственное продление"))
-    }
-
-    @Test
-    fun `panel mode is resolved before the client web port is validated`() {
-        val deploy = script()
-        val installBranch = deploy.substringAfter("install|--install|-i)")
-        val resolve = installBranch.indexOf("resolve_panel_mode")
-        val validatePort = installBranch.indexOf("validate_port \"CSQTT_WEB_PORT\"")
-        assertTrue(resolve >= 0)
-        assertTrue(validatePort >= 0)
-        assertTrue(
-            "resolve_panel_mode обязан идти до validate_port: иначе доменный режим падает на порту клиента",
-            resolve < validatePort,
-        )
-    }
-
-    @Test
-    fun `panel web port is checked before the runtime tries to bind it`() {
-        val deploy = script()
-        val installBranch = deploy.substringAfter("install|--install|-i)")
-        val check = installBranch.indexOf("assert_web_port_is_available")
-        val dockerStart = installBranch.indexOf("run_timed \"Docker activation\" setup_csqtt_docker")
-        val start = installBranch.indexOf("run_timed \"запуск\" start_csqtt")
-        assertTrue(check >= 0)
-        assertTrue(dockerStart >= 0)
-        assertTrue(start >= 0)
-        assertTrue(
-            "проверка порта обязана идти до setup_csqtt_docker: иначе занятый 443 даёт невнятный crash-loop",
-            check < dockerStart,
-        )
-        assertTrue(
-            "проверка порта обязана идти до запуска панели",
-            check < start,
-        )
-    }
-
-    @Test
-    fun `installer issues and renews a trusted certificate for a domain panel`() {
-        val deploy = script()
-        assertTrue(deploy.contains("resolve_panel_mode"))
-        assertTrue(deploy.contains("PANEL_MODE=\"domain\""))
-        assertTrue(deploy.contains("--domains \"\$PANEL_HOST\""))
-        assertTrue(deploy.contains("fw_remove_input_tcp"))
-        assertTrue(deploy.contains("ensure_persistent_directory"))
-        assertTrue(deploy.contains("--cap-add NET_BIND_SERVICE"))
-        assertTrue(deploy.contains("setup_web_panel_tls"))
-        assertTrue(deploy.contains("LE_ROOT=\"\${CSQTT_LE_ROOT:-/etc/letsencrypt}\""))
-        assertFalse(deploy.contains("setup_letsencrypt_ip_tls"))
-    }
-
-    @Test
-    fun `domain preflight guards the running panel before the cutover`() {
-        val deploy = script()
-        val installBranch = deploy.substringAfter("install|--install|-i)")
-        val preflight = installBranch.indexOf("run_domain_mode_preflight")
-        val cleanup = installBranch.indexOf("csqtt_cleanup")
-        assertTrue(preflight >= 0)
-        assertTrue(cleanup >= 0)
-        assertTrue(
-            "проверки доменного режима обязаны идти до остановки работающей панели",
-            preflight < cleanup,
-        )
-        assertTrue(deploy.contains("assert_letsencrypt_http_port_is_available"))
-        assertTrue(deploy.contains("assert_web_port_is_available"))
-    }
-
-    @Test
-    fun `certificate state records the panel mode and is written last`() {
-        val deploy = script()
-        assertTrue(deploy.contains("printf 'MODE=%s\\nIDENTIFIER=%s\\nCERT_NAME=%s\\n'"))
-        assertTrue(deploy.contains("letsencrypt.env"))
-        assertTrue(deploy.contains("csqtt-ip-%s"))
-        assertTrue(deploy.contains("csqtt-%s"))
-        assertTrue(deploy.contains("--domains"))
-        assertTrue(deploy.contains("--ip-address \"\$public_ip\""))
-        assertTrue(deploy.contains("stop_letsencrypt_renewal_timer"))
-        assertTrue(deploy.contains("Environment=CSQTT_LE_ROOT=\${CSQTT_LE_ROOT}"))
-        assertTrue(deploy.contains("Environment=CSQTT_LE_IDENTIFIER="))
     }
 }

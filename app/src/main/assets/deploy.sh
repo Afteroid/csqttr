@@ -6,20 +6,19 @@ export DEBIAN_FRONTEND=noninteractive
 export TERM="${TERM:-xterm}"
 
 readonly SCRIPT_VERSION="2.5.0"
-readonly LOG_FILE="${CSQTT_INSTALL_LOG_FILE:-/var/log/csqtt-install.log}"
+readonly LOG_FILE="/var/log/csqtt-install.log"
 readonly PEER_PORT="${CSQTT_PEER_PORT:-46000}"
 readonly SSH_PORT="${CSQTT_SSH_PORT:-22}"
-WEB_PORT="${CSQTT_WEB_PORT:-46002}"
+readonly WEB_PORT="${CSQTT_WEB_PORT:-46002}"
 readonly LE_HTTP_PORT="80"
-LE_RENEW_BEFORE_SECONDS="259200"
+readonly LE_RENEW_BEFORE_SECONDS="259200"
 readonly DEPLOY_MODE="${CSQTT_DEPLOY_MODE:-systemd}"
 readonly CSQTT_IFACE="csqtt1"
-readonly CSQTT_CONFIG_DIR="${CSQTT_CONFIG_DIR:-/etc/csqtt}"
-readonly CSQTT_LE_ROOT="${CSQTT_LE_ROOT:-/etc/letsencrypt}"
-readonly CSQTT_LE_CERTBOT="${CSQTT_LE_CERTBOT:-/opt/csqtt-certbot/bin/certbot}"
-readonly CSQTT_LE_VENV="${CSQTT_LE_VENV:-/opt/csqtt-certbot}"
-readonly CSQTT_LE_STATE_FILE="${CSQTT_LE_STATE_FILE:-${CSQTT_CONFIG_DIR}/letsencrypt.env}"
-readonly CSQTT_LE_RENEW_HELPER="${CSQTT_LE_RENEW_HELPER:-/usr/local/lib/csqtt-letsencrypt-renew.sh}"
+readonly CSQTT_CONFIG_DIR="/etc/csqtt"
+readonly CSQTT_LE_CERTBOT="/opt/csqtt-certbot/bin/certbot"
+readonly CSQTT_LE_VENV="/opt/csqtt-certbot"
+readonly CSQTT_LE_STATE_FILE="${CSQTT_CONFIG_DIR}/letsencrypt-ip.env"
+readonly CSQTT_LE_RENEW_HELPER="/usr/local/lib/csqtt-letsencrypt-renew.sh"
 readonly CSQTT_LE_SERVICE="csqtt-letsencrypt.service"
 readonly CSQTT_LE_TIMER="csqtt-letsencrypt.timer"
 readonly CSQTT_DATABASE_FILE="csqtt.db"
@@ -31,7 +30,7 @@ readonly CSQTT_ENV_FILE="${CSQTT_CONFIG_DIR}/csqtt.env"
 readonly CSQTT_DEPLOY_OVERRIDES_FILE="${CSQTT_CONFIG_DIR}/deploy-overrides.json"
 readonly CSQTT_RUNTIME_ARCHIVE_DIR="${CSQTT_CONFIG_DIR}/runtime-archive"
 readonly UPLOAD_BINARY="/tmp/.csqtt-upload-server"
-readonly UPLOAD_ENV_FILE="${CSQTT_UPLOAD_ENV_FILE:-/tmp/.csqtt-upload-web.env}"
+readonly UPLOAD_ENV_FILE="/tmp/.csqtt-upload-web.env"
 readonly UPLOAD_OVERRIDES_FILE="/tmp/.csqtt-upload-overrides.json"
 readonly CSQTT_SYSCTL_FILE="/etc/sysctl.d/99-csqtt.conf"
 readonly CSQTT_UDP_SYSCTL_FILE="/etc/sysctl.d/99-csqtt-udp-buffers.conf"
@@ -53,9 +52,6 @@ SYSTEMD_NEEDS_RELOAD=0
 DEPLOY_PHASE="initial"
 DOCKER_CONTEXT_DIR=""
 CSQTT_DOCKER_CANDIDATE_IMAGE=""
-# Заполняются resolve_panel_mode() в начале install: ip|domain, хост панели.
-PANEL_MODE=""
-PANEL_HOST=""
 
 validate_port() {
     local name="$1" value="$2"
@@ -283,22 +279,6 @@ assert_peer_port_is_available() {
     log_warn "UDP/${PEER_PORT} занят; выполняется принудительное освобождение"
     force_release_peer_port || die "Не удалось принудительно освободить UDP/${PEER_PORT}"
     [ -z "$(peer_port_listeners)" ] || die "UDP/${PEER_PORT} остался занят после принудительной очистки"
-}
-
-web_port_listeners() {
-    ss -ltnH "sport = :${WEB_PORT}" 2>/dev/null || true
-}
-
-# Порт панели занимает чужой процесс: принудительного освобождения здесь нет,
-# в отличие от assert_peer_port_is_available. Проверка стоит перед стартом
-# панели и покрывает обе ветки — systemd и docker.
-assert_web_port_is_available() {
-    local listeners
-    listeners="$(web_port_listeners)"
-    [ -z "$listeners" ] && return 0
-    log_warn "TCP/${WEB_PORT} занят другим процессом:"
-    printf '%s\n' "$listeners" | tee -a "$LOG_FILE" >&2
-    die "Порт ${WEB_PORT} занят другим процессом; освободите его и повторите установку"
 }
 
 archive_csqtt_docker_state() {
@@ -677,33 +657,6 @@ fw_add_input_tcp() {
         die "Не удалось открыть ${port}/tcp в iptables"
 }
 
-# Правила firewall только добавляются, поэтому порт, который панель больше не
-# использует, закрывается явно. Цикл ограничен: `iptables -D` возвращает неуспех,
-# когда правила нет, а на чистой машине это постоянное состояние — неограниченный
-# цикл там завис бы. Перечисление — через `-S INPUT`, как в delete_marked_rules.
-fw_remove_input_tcp() {
-    local port="$1" attempt listing
-    for attempt in 1 2 3 4 5 6 7 8; do
-        listing="$(iptables -w "$XT_WAIT" -S INPUT 2>/dev/null || true)"
-        printf '%s\n' "$listing" | \
-            grep -Eq -- "^-A INPUT .*--dport ${port}([[:space:]]|$).*${IPT_COMMENT}" || return 0
-        if iptables -w "$XT_WAIT" -D INPUT -p tcp --dport "$port" \
-            -m comment --comment "$IPT_COMMENT" -j ACCEPT >>"$LOG_FILE" 2>&1; then
-            return 0
-        fi
-    done
-    log_warn "Не удалось закрыть TCP/${port} в iptables за 8 попыток: правило могло остаться"
-    return 1
-}
-
-# В доменном режиме панель уезжает на 443, в IP-режиме — обратно на 46002.
-fw_close_unused_panel_port() {
-    case "${PANEL_MODE:-}" in
-        domain) fw_remove_input_tcp "46002" || true ;;
-        ip) fw_remove_input_tcp "443" || true ;;
-    esac
-}
-
 fw_add_forward() {
     ipt_add_or_ensure filter INPUT -i "$CSQTT_IFACE" -s "10.66.67.0/24" -m comment --comment "$IPT_COMMENT" -j ACCEPT || \
         die "Не удалось установить INPUT -i $CSQTT_IFACE"
@@ -803,34 +756,14 @@ ensure_csqtt_directory() {
     chmod "$mode" "$path" || die "Не удалось установить права на каталог CSQTT: $path"
 }
 
-# Каталог данных нельзя пересоздавать: владелец мог вынести его на другой диск
-# симлинком, и rm -rf по ссылке уничтожил бы саму ссылку, оставив данные «в
-# стороне». Здесь ничего не удаляется никогда.
-ensure_persistent_directory() {
-    local path="$1" mode="$2" resolved
-    if [ -L "$path" ]; then
-        resolved="$(readlink -f -- "$path" 2>/dev/null || true)"
-        [ -n "$resolved" ] || \
-            die "Не удалось разрешить символическую ссылку каталога данных CSQTT: $path"
-        [ -d "$resolved" ] || \
-            die "Символическая ссылка каталога данных CSQTT ведёт в несуществующий путь: $path -> $resolved"
-        path="$resolved"
-    fi
-    if [ -e "$path" ] && [ ! -d "$path" ]; then
-        die "Путь каталога данных CSQTT существует, но это не каталог: $path"
-    fi
-    mkdir -p -- "$path" || die "Не удалось подготовить каталог CSQTT: $path"
-    chmod "$mode" "$path" || die "Не удалось установить права на каталог CSQTT: $path"
-}
-
 clear_runtime_config_preserving_database() {
     local entry base
-    ensure_persistent_directory "$CSQTT_CONFIG_DIR" 700
+    ensure_csqtt_directory "$CSQTT_CONFIG_DIR" 700
     shopt -s nullglob dotglob
     for entry in "$CSQTT_CONFIG_DIR"/*; do
         base="${entry##*/}"
         case "$base" in
-            "$CSQTT_DATABASE_FILE"|"$CSQTT_DATABASE_WAL_FILE"|"$CSQTT_DATABASE_SHM_FILE"|"$CSQTT_LEGACY_MIGRATION_JSON"|"$CSQTT_LEGACY_MIGRATION_IMPORTED_JSON"|web_cert.pem|web_key.pem|letsencrypt-ip.env|letsencrypt.env|runtime-archive) continue ;;
+            "$CSQTT_DATABASE_FILE"|"$CSQTT_DATABASE_WAL_FILE"|"$CSQTT_DATABASE_SHM_FILE"|"$CSQTT_LEGACY_MIGRATION_JSON"|"$CSQTT_LEGACY_MIGRATION_IMPORTED_JSON"|web_cert.pem|web_key.pem|letsencrypt-ip.env|runtime-archive) continue ;;
         esac
         rm -rf -- "$entry"
     done
@@ -936,14 +869,6 @@ remove_csqtt_tun_interface() {
 csqtt_cleanup() {
     prog 0.15 "Очистка..."
     echo "🧹 Переключение со старой установки CSQTT..."
-
-    # Таймер продления живёт рядом с хелпером и переживает снос runtime: старый
-    # юнит не попадает в list_csqtt_systemd_units (там только *.service за
-    # вычетом LE), а rm -rf /usr/local/lib/csqtt не трогает сам хелпер. Пока идёт
-    # переключение, он может выстрелить и сразиться за порт 80 либо потратить
-    # выпуск. Останавливаем до любых изменений; включает его обратно
-    # install_letsencrypt_renewal_timer в конце установки.
-    stop_letsencrypt_renewal_timer
 
     local had_old_install=0 managed_systemd_unit=0
     if csqtt_systemd_unit_is_managed; then
@@ -1086,7 +1011,6 @@ setup_nat_and_firewall() {
         ip route replace "$gw_ip" dev "$iface" scope link >>"$LOG_FILE" 2>&1 || true
     fi
 
-    fw_close_unused_panel_port
     fw_add_input_udp "$PEER_PORT"
     fw_add_input_tcp "$WEB_PORT"
     fw_add_input_tcp "$LE_HTTP_PORT"
@@ -1098,22 +1022,17 @@ setup_nat_and_firewall() {
     fw_add_mss_clamping "10.66.67.0/24"
 
     echo "✓ NAT: MASQUERADE на $iface для 10.66.67.0/24"
-    echo "✓ Порты CSQTT: ${PEER_PORT}/udp(PEER), ${WEB_PORT}/tcp(WEB: $(panel_web_mode_label)), ${LE_HTTP_PORT}/tcp(LE)"
+    echo "✓ Порты CSQTT: ${PEER_PORT}/udp(PEER), ${WEB_PORT}/tcp(WEB), ${LE_HTTP_PORT}/tcp(LE)"
     echo "✓ TCP MSS Clamping включен"
 }
 
 write_network_helper() {
-    local target="$1" stale_web_port=""
-    case "${PANEL_MODE:-}" in
-        domain) stale_web_port="46002" ;;
-        ip) stale_web_port="443" ;;
-    esac
+    local target="$1"
     cat > "$target" << NETEOF
 #!/bin/sh
 set -eu
     PEER_PORT="$PEER_PORT"
 WEB_PORT="$WEB_PORT"
-STALE_WEB_PORT="$stale_web_port"
 LE_HTTP_PORT="$LE_HTTP_PORT"
 CSQTT_IFACE="$CSQTT_IFACE"
 IPT_COMMENT="$IPT_COMMENT"
@@ -1201,22 +1120,6 @@ if ip link show "\$CSQTT_IFACE" >/dev/null 2>&1; then
 fi
 
 ipt() { iptables -w "\$XT_WAIT" "\$@"; }
-# Порт, который в текущем режиме больше не используется, закрывается явно: без
-# этого docker-режим пережил бы переключение со старым правилом на месте. Строки
-# условны на момент генерации (STALE_WEB_PORT пуст в неизвестном режиме), цикл
-# ограничен 8 попытками, синтаксис — POSIX: сгенерированный скрипт это /bin/sh.
-if [ -n "\$STALE_WEB_PORT" ]; then
-    stale_attempt=1
-    while [ "\$stale_attempt" -le 8 ]; do
-        stale_listing=\$(ipt -S INPUT 2>/dev/null || true)
-        printf '%s\\n' "\$stale_listing" | \
-            grep -Eq -- "^-A INPUT .*--dport \${STALE_WEB_PORT}([[:space:]]|\$).*\$IPT_COMMENT" || break
-        if ipt -D INPUT -p tcp --dport "\$STALE_WEB_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT >/dev/null 2>&1; then
-            break
-        fi
-        stale_attempt=\$((stale_attempt + 1))
-    done
-fi
 ipt -C INPUT -p udp --dport "\$PEER_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I INPUT -p udp --dport "\$PEER_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
 ipt -C INPUT -p tcp --dport "\$WEB_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I INPUT -p tcp --dport "\$WEB_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
 ipt -C INPUT -p tcp --dport "\$LE_HTTP_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I INPUT -p tcp --dport "\$LE_HTTP_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
@@ -1369,7 +1272,7 @@ setup_csqtt_binary() {
 }
 
 setup_csqtt_environment() {
-    ensure_persistent_directory "$CSQTT_CONFIG_DIR" 700
+    ensure_csqtt_directory "$CSQTT_CONFIG_DIR" 700
     install -m 0600 "$UPLOAD_ENV_FILE" "$CSQTT_ENV_FILE" || \
         die "Не удалось активировать загруженную WEB-конфигурацию"
     if ! grep -Eq '^[[:space:]]*(export[[:space:]]+)?CSQTT_PUBLIC_IP=.+$' "$CSQTT_ENV_FILE"; then
@@ -1413,133 +1316,6 @@ is_public_ipv4() {
     return 0
 }
 
-# Зеркало is_public_ipv4: то, что публичная функция отклоняет как «не публичное»,
-# здесь классифицируется как частное, чтобы текст отказа был точным. 198.18/19 —
-# фактически /15, как и в is_public_ipv4.
-is_private_ipv4() {
-    local ip="$1" first second third fourth value
-    case "$ip" in
-        *[!0-9.]*|*..*|.*|*.) return 1 ;;
-    esac
-    IFS=. read -r first second third fourth <<< "$ip"
-    for value in "$first" "$second" "$third" "$fourth"; do
-        case "$value" in
-            ''|*[!0-9]*) return 1 ;;
-        esac
-        [ "$value" -le 255 ] || return 1
-    done
-    [ "$first" -eq 0 ] && return 0
-    [ "$first" -eq 10 ] && return 0
-    [ "$first" -eq 127 ] && return 0
-    [ "$first" -eq 100 ] && [ "$second" -ge 64 ] && [ "$second" -le 127 ] && return 0
-    [ "$first" -eq 169 ] && [ "$second" -eq 254 ] && return 0
-    [ "$first" -eq 172 ] && [ "$second" -ge 16 ] && [ "$second" -le 31 ] && return 0
-    [ "$first" -eq 192 ] && [ "$second" -eq 168 ] && return 0
-    [ "$first" -eq 198 ] && { [ "$second" -eq 18 ] || [ "$second" -eq 19 ]; } && return 0
-    [ "$first" -ge 224 ] && return 0
-    return 1
-}
-
-# IDN/punycode не транскодируется осознанно: не-ASCII имя отвергается, человек
-# вводит punycode сам. Последняя метка обязана содержать букву — это отсекает
-# «1.2.3.4.5», не прошедшее is_public_ipv4.
-is_dns_hostname() {
-    local name="$1" label last
-    [ -n "$name" ] || return 1
-    [ "${#name}" -le 253 ] || return 1
-    case "$name" in
-        *[!A-Za-z0-9.-]*) return 1 ;;
-        .*|*.|*..*) return 1 ;;
-    esac
-    last="${name##*.}"
-    case "$last" in
-        *[A-Za-z]*) ;;
-        *) return 1 ;;
-    esac
-    local IFS=.
-    for label in $name; do
-        [ -n "$label" ] || return 1
-        [ "${#label}" -le 63 ] || return 1
-        case "$label" in
-            -*|*-) return 1 ;;
-        esac
-    done
-    return 0
-}
-
-# Значение из $UPLOAD_ENV_FILE в systemd-режиме обёрнуто в кавычки и экранировано
-# (DeployOperations.kt, systemdEnvironmentValue), в docker-режиме — голое.
-panel_host_from_uploaded_env() {
-    local value
-    [ -f "$UPLOAD_ENV_FILE" ] || return 1
-    value="$(grep -E '^[[:space:]]*(export[[:space:]]+)?CSQTT_PUBLIC_IP=' "$UPLOAD_ENV_FILE" 2>/dev/null | head -n 1 | cut -d= -f2- || true)"
-    [ -n "$value" ] || return 1
-    printf '%s\n' "$value"
-}
-
-# Определяет режим панели один раз в начале установки. Приоритет — файл,
-# присланный телефоном; переменная окружения нужна для ручного запуска.
-resolve_panel_mode() {
-    local raw="" host=""
-    raw="$(panel_host_from_uploaded_env 2>/dev/null || true)"
-    if [ -z "$raw" ]; then
-        raw="${CSQTT_PUBLIC_IP:-}"
-    fi
-    host="$(printf '%s' "$raw" | tr -d '\\' | tr -d '"' | tr -d "'" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-
-    if [ -z "$host" ]; then
-        die "Поле «IP сервера или домен» не заполнено: укажите публичный IPv4-адрес или доменное имя" "$EXIT_INVALID_ARGUMENT"
-    fi
-
-    if is_public_ipv4 "$host"; then
-        PANEL_MODE="ip"
-        PANEL_HOST="$host"
-        WEB_PORT="${CSQTT_WEB_PORT:-46002}"
-        LE_RENEW_BEFORE_SECONDS="259200"
-        log_info "Режим панели: IP ${PANEL_HOST}, порт ${WEB_PORT}"
-        return 0
-    fi
-
-    if is_dns_hostname "$host"; then
-        PANEL_MODE="domain"
-        PANEL_HOST="$host"
-        WEB_PORT="443"
-        LE_RENEW_BEFORE_SECONDS="2592000"
-        log_info "Режим панели: домен ${PANEL_HOST}, порт ${WEB_PORT}"
-        return 0
-    fi
-
-    if is_private_ipv4 "$host"; then
-        die "Панель и туннель требуют публичный IPv4 или домен: ${host} недостижим с TURN-релея и из интернета. Чтобы вернуть предыдущий режим, повторите установку, указав IP-адрес сервера" "$EXIT_INVALID_ARGUMENT"
-    fi
-
-    die "Ожидается публичный IPv4-адрес или доменное имя, получено: ${host}. Чтобы вернуть предыдущий режим, повторите установку, указав IP-адрес сервера" "$EXIT_INVALID_ARGUMENT"
-}
-
-# Баннеры установщика печатают режим и хост панели: в доменном режиме порт 443
-# и домен, в IP-режиме порт и адрес.
-panel_web_mode_label() {
-    case "${PANEL_MODE:-ip}" in
-        domain) printf 'домен %s\n' "${PANEL_HOST:-}" ;;
-        *) printf 'IP %s\n' "${PANEL_HOST:-}" ;;
-    esac
-}
-
-panel_web_port_label() {
-    printf '%s (%s)\n' "$WEB_PORT" "$(panel_web_mode_label)"
-}
-
-print_installer_header() {
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║       CSQTT VPN Server — Installer v${SCRIPT_VERSION}                    ║"
-    if [ -n "${PANEL_MODE:-}" ]; then
-        echo "║       PEER: ${PEER_PORT}  |  SSH: ${SSH_PORT}  | WEB: ${WEB_PORT}       ║"
-    else
-        echo "║       PEER: ${PEER_PORT}  |  SSH: ${SSH_PORT}                          ║"
-    fi
-    echo "╚══════════════════════════════════════════════════════════════╝"
-}
-
 detect_public_ipv4() {
     local route_ip
     route_ip="$(ip -4 route get 77.88.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1)"
@@ -1559,36 +1335,8 @@ detect_public_ipv4() {
     return 1
 }
 
-# В доменном режиме нужен --domains, в IP-режиме — --ip-address: системный
-# certbot без нужного флага не должен приниматься за готового клиента, иначе
-# установка уйдёт в лишний venv или в ложный отказ.
-panel_certbot_flag() {
-    case "${PANEL_MODE:-ip}" in
-        domain) printf '%s\n' "--domains" ;;
-        *) printf '%s\n' "--ip-address" ;;
-    esac
-}
-
-certbot_supports() {
-    local certbot="$1" flag
-    flag="$(panel_certbot_flag)"
-    "$certbot" certonly --help all 2>&1 | grep -Fq -- "$flag"
-}
-
-letsencrypt_http_port_listeners() {
-    ss -ltnH "sport = :${LE_HTTP_PORT}" 2>/dev/null || true
-}
-
-# TCP/80 нужен HTTP-01 и должен быть свободен. В доменном режиме занятость —
-# фатальная ошибка: подставить самоподписанный сертификат вместо доменного
-# нельзя (решение владельца 4).
-assert_letsencrypt_http_port_is_available() {
-    local listeners
-    listeners="$(letsencrypt_http_port_listeners)"
-    [ -z "$listeners" ] && return 0
-    log_warn "TCP/${LE_HTTP_PORT} занят другим сервисом:"
-    printf '%s\n' "$listeners" | tee -a "$LOG_FILE" >&2
-    die "Порт ${LE_HTTP_PORT} занят другим сервисом; освободите его: он нужен Let’s Encrypt для проверки домена. Чтобы вернуть предыдущий режим, повторите установку, указав IP-адрес сервера"
+certbot_supports_ip_certificates() {
+    "$1" certonly --help all 2>&1 | grep -Fq -- "--ip-address"
 }
 
 ensure_letsencrypt_client() {
@@ -1596,12 +1344,12 @@ ensure_letsencrypt_client() {
     local -a python_packages=()
     if command -v certbot >/dev/null 2>&1; then
         system_certbot="$(command -v certbot)"
-        if certbot_supports "$system_certbot"; then
+        if certbot_supports_ip_certificates "$system_certbot"; then
             LE_CERTBOT_COMMAND="$system_certbot"
             return 0
         fi
     fi
-    if [ -x "$CSQTT_LE_CERTBOT" ] && certbot_supports "$CSQTT_LE_CERTBOT"; then
+    if [ -x "$CSQTT_LE_CERTBOT" ] && certbot_supports_ip_certificates "$CSQTT_LE_CERTBOT"; then
         LE_CERTBOT_COMMAND="$CSQTT_LE_CERTBOT"
         return 0
     fi
@@ -1635,71 +1383,22 @@ ensure_letsencrypt_client() {
         log_warn "Не удалось установить актуальный Certbot с поддержкой IP-сертификатов; WEB-панель временно останется на self-signed TLS"
         return 1
     fi
-    if ! certbot_supports "$CSQTT_LE_CERTBOT"; then
-        log_warn "Установленный Certbot не поддерживает сертификаты Let’s Encrypt для выбранного режима панели"
+    if ! certbot_supports_ip_certificates "$CSQTT_LE_CERTBOT"; then
+        log_warn "Установленный Certbot не поддерживает Let’s Encrypt IP-сертификаты"
         return 1
     fi
     LE_CERTBOT_COMMAND="$CSQTT_LE_CERTBOT"
     return 0
 }
 
-# Имя сертификата зависит от режима: IP-сертификат исторически csqtt-ip-<ip>,
-# доменный — csqtt-<домен>. Версия с режимом нужна проверкам состояния: они
-# сверяют имя с режимом, записанным в state, а не с текущим.
-letsencrypt_cert_name_for_mode() {
-    local mode="$1" identifier="$2"
-    case "$mode" in
-        domain) printf 'csqtt-%s\n' "$identifier" ;;
-        *) printf 'csqtt-ip-%s\n' "${identifier//./-}" ;;
-    esac
-}
-
 letsencrypt_cert_name() {
-    letsencrypt_cert_name_for_mode "${PANEL_MODE:-ip}" "$1"
-}
-
-# SAN сверяется с режимом: домен в SAN — DNS:<домен>, IP — IP Address:<ip>.
-panel_san_matches() {
-    local mode="$1" identifier="$2" subject_alt_names="$3"
-    case "$mode" in
-        domain)
-            printf '%s\n' "$subject_alt_names" | grep -Fq "DNS:${identifier}"
-            ;;
-        *)
-            printf '%s\n' "$subject_alt_names" | grep -Fq "IP Address:${identifier}" || \
-                printf '%s\n' "$subject_alt_names" | grep -Fq "IP:${identifier}"
-            ;;
-    esac
+    printf 'csqtt-ip-%s\n' "${1//./-}"
 }
 
 state_value() {
     local key="$1"
     [ -f "$CSQTT_LE_STATE_FILE" ] || return 1
     sed -n "s/^${key}=//p" "$CSQTT_LE_STATE_FILE" | head -n 1
-}
-
-# Легаси-состояние letsencrypt-ip.env (формат IP=/CERT_NAME=) читается как
-# IP-режим. Без этого после переименования state установка приняла бы свой же
-# IP-сертификат за пользовательский и молча оставила бы панель без продления.
-legacy_letsencrypt_state_value() {
-    local key="$1" file="${CSQTT_CONFIG_DIR}/letsencrypt-ip.env"
-    [ -f "$file" ] || return 1
-    sed -n "s/^${key}=//p" "$file" | head -n 1
-}
-
-# Переносит легаси-состояние в новый формат. Только IP-режим: в доменном
-# установка обязана либо выпустить доменный сертификат, либо упасть, не
-# записывая чужой режим.
-migrate_legacy_letsencrypt_state() {
-    local legacy_ip cert_name
-    [ -f "$CSQTT_LE_STATE_FILE" ] && return 1
-    legacy_ip="$(legacy_letsencrypt_state_value IP 2>/dev/null || true)"
-    is_public_ipv4 "$legacy_ip" || return 1
-    cert_name="$(legacy_letsencrypt_state_value CERT_NAME 2>/dev/null || true)"
-    [ -n "$cert_name" ] || cert_name="$(letsencrypt_cert_name_for_mode ip "$legacy_ip")"
-    printf 'MODE=ip\nIDENTIFIER=%s\nCERT_NAME=%s\n' "$legacy_ip" "$cert_name" > "$CSQTT_LE_STATE_FILE"
-    chmod 0600 "$CSQTT_LE_STATE_FILE"
-    log_info "Состояние Let’s Encrypt перенесено в ${CSQTT_LE_STATE_FILE}"
 }
 
 certificate_is_csqtt_rcgen() {
@@ -1714,27 +1413,14 @@ certificate_is_csqtt_rcgen() {
 }
 
 certificate_is_csqtt_letsencrypt() {
-    local saved_mode saved_identifier cert_name issuer subject_alt_names
+    local saved_ip cert_name issuer subject_alt_names
     [ -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || return 1
     [ -s "$CSQTT_CONFIG_DIR/web_key.pem" ] || return 1
     command -v openssl >/dev/null 2>&1 || return 1
-    saved_mode="$(state_value MODE 2>/dev/null || true)"
-    saved_identifier="$(state_value IDENTIFIER 2>/dev/null || true)"
+    saved_ip="$(state_value IP 2>/dev/null || true)"
     cert_name="$(state_value CERT_NAME 2>/dev/null || true)"
-    if [ -z "$saved_mode" ]; then
-        # Легаси-файл описывает только IP-режим.
-        saved_identifier="$(legacy_letsencrypt_state_value IP 2>/dev/null || true)"
-        if is_public_ipv4 "$saved_identifier"; then
-            saved_mode="ip"
-            [ -n "$cert_name" ] || cert_name="$(legacy_letsencrypt_state_value CERT_NAME 2>/dev/null || true)"
-        fi
-    fi
-    case "$saved_mode" in
-        domain) is_dns_hostname "$saved_identifier" || return 1 ;;
-        ip) is_public_ipv4 "$saved_identifier" || return 1 ;;
-        *) return 1 ;;
-    esac
-    [ "$cert_name" = "$(letsencrypt_cert_name_for_mode "$saved_mode" "$saved_identifier")" ] || return 1
+    is_public_ipv4 "$saved_ip" || return 1
+    [ "$cert_name" = "$(letsencrypt_cert_name "$saved_ip")" ] || return 1
     issuer="$(openssl x509 -noout -issuer -nameopt RFC2253 -in "$CSQTT_CONFIG_DIR/web_cert.pem" 2>/dev/null || true)"
     issuer="${issuer#issuer=}"
     case "$issuer" in
@@ -1742,7 +1428,7 @@ certificate_is_csqtt_letsencrypt() {
         *) return 1 ;;
     esac
     subject_alt_names="$(openssl x509 -noout -ext subjectAltName -in "$CSQTT_CONFIG_DIR/web_cert.pem" 2>/dev/null || true)"
-    panel_san_matches "$saved_mode" "$saved_identifier" "$subject_alt_names"
+    printf '%s\n' "$subject_alt_names" | grep -Fq "IP Address:${saved_ip}" || printf '%s\n' "$subject_alt_names" | grep -Fq "IP:${saved_ip}"
 }
 
 web_certificate_is_csqtt_managed() {
@@ -1755,12 +1441,10 @@ web_certificate_is_user_managed() {
 }
 
 letsencrypt_certificate_is_current() {
-    local identifier="$1" saved_mode saved_identifier
+    local public_ip="$1" saved_ip
     certificate_is_csqtt_letsencrypt || return 1
-    saved_mode="$(state_value MODE 2>/dev/null || true)"
-    [ "$saved_mode" = "${PANEL_MODE:-ip}" ] || return 1
-    saved_identifier="$(state_value IDENTIFIER 2>/dev/null || true)"
-    [ "$saved_identifier" = "$identifier" ] || return 1
+    saved_ip="$(state_value IP 2>/dev/null || true)"
+    [ "$saved_ip" = "$public_ip" ] || return 1
     [ -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || return 1
     openssl x509 -noout -checkend "$LE_RENEW_BEFORE_SECONDS" -in "$CSQTT_CONFIG_DIR/web_cert.pem" >/dev/null 2>&1
 }
@@ -1771,23 +1455,16 @@ disable_letsencrypt_renewal_timer() {
     systemctl disable --now "$CSQTT_LE_TIMER" >/dev/null 2>&1 || true
 }
 
-# Остановка без выключения: таймер обязан замолчать на время переключения, но
-# включать его будет install_letsencrypt_renewal_timer в конце установки.
-stop_letsencrypt_renewal_timer() {
-    command -v systemctl >/dev/null 2>&1 || return 0
-    systemctl stop "$CSQTT_LE_TIMER" "$CSQTT_LE_SERVICE" >/dev/null 2>&1 || true
-}
-
 install_letsencrypt_certificate() {
-    local identifier="$1" cert_name="$2" source_dir cert_tmp key_tmp state_tmp
-    source_dir="${CSQTT_LE_ROOT}/live/${cert_name}"
+    local public_ip="$1" cert_name="$2" source_dir cert_tmp key_tmp state_tmp
+    source_dir="/etc/letsencrypt/live/${cert_name}"
     [ -s "$source_dir/fullchain.pem" ] && [ -s "$source_dir/privkey.pem" ] || return 1
     cert_tmp="$(mktemp "${CSQTT_CONFIG_DIR}/.web_cert.XXXXXX")" || return 1
     key_tmp="$(mktemp "${CSQTT_CONFIG_DIR}/.web_key.XXXXXX")" || {
         rm -f -- "$cert_tmp"
         return 1
     }
-    state_tmp="$(mktemp "${CSQTT_CONFIG_DIR}/.letsencrypt.XXXXXX")" || {
+    state_tmp="$(mktemp "${CSQTT_CONFIG_DIR}/.letsencrypt-ip.XXXXXX")" || {
         rm -f -- "$cert_tmp" "$key_tmp"
         return 1
     }
@@ -1796,31 +1473,24 @@ install_letsencrypt_certificate() {
         rm -f -- "$cert_tmp" "$key_tmp" "$state_tmp"
         return 1
     fi
-    printf 'MODE=%s\nIDENTIFIER=%s\nCERT_NAME=%s\n' "${PANEL_MODE:-ip}" "$identifier" "$cert_name" > "$state_tmp"
+    printf 'IP=%s\nCERT_NAME=%s\n' "$public_ip" "$cert_name" > "$state_tmp"
     chmod 0600 "$state_tmp"
-    # State пишется последним: если активация файлов не удалась, состояние не
-    # должно объявлять режим, которому диск не соответствует.
     mv -f -- "$cert_tmp" "$CSQTT_CONFIG_DIR/web_cert.pem"
     mv -f -- "$key_tmp" "$CSQTT_CONFIG_DIR/web_key.pem"
     mv -f -- "$state_tmp" "$CSQTT_LE_STATE_FILE"
     secure_persistent_state
 }
 
-# SAN сертификата, лежащего в web_cert.pem. Нужен adopt-у, которому state уже
-# недоступен: в доменном режиме извлекается DNS:<домен>, в IP-режиме — адрес.
-letsencrypt_certificate_identifier() {
+letsencrypt_certificate_ip() {
     local subject_alt_names
     [ -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || return 1
     command -v openssl >/dev/null 2>&1 || return 1
     subject_alt_names="$(openssl x509 -noout -ext subjectAltName -in "$CSQTT_CONFIG_DIR/web_cert.pem" 2>/dev/null || true)"
-    case "${PANEL_MODE:-ip}" in
-        domain) printf '%s\n' "$subject_alt_names" | sed -n -E 's/.*DNS:([A-Za-z0-9.-]+).*/\1/p' | head -n 1 ;;
-        *) printf '%s\n' "$subject_alt_names" | sed -n -E 's/.*(IP Address:|IP:)([0-9.]+).*/\2/p' | head -n 1 ;;
-    esac
+    printf '%s\n' "$subject_alt_names" | sed -n -E 's/.*(IP Address:|IP:)([0-9.]+).*/\2/p' | head -n 1
 }
 
 adopt_letsencrypt_certificate() {
-    local identifier cert_name source_dir issuer
+    local public_ip cert_name source_dir issuer
     [ -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || return 1
     [ -s "$CSQTT_CONFIG_DIR/web_key.pem" ] || return 1
     command -v openssl >/dev/null 2>&1 || return 1
@@ -1830,44 +1500,18 @@ adopt_letsencrypt_certificate() {
         *"O=Let's Encrypt"*|*ISRG*) ;;
         *) return 1 ;;
     esac
-    identifier="$(letsencrypt_certificate_identifier 2>/dev/null || true)"
-    # SAN сертификата обязан соответствовать текущему режиму, иначе adopt
-    # записал бы чужой режим посреди установки.
-    case "${PANEL_MODE:-ip}" in
-        domain)
-            [ -n "$identifier" ] || return 1
-            [ "$identifier" = "$PANEL_HOST" ] || return 1
-            ;;
-        *)
-            is_public_ipv4 "$identifier" || return 1
-            ;;
-    esac
-    cert_name="$(letsencrypt_cert_name "$identifier")"
-    source_dir="${CSQTT_LE_ROOT}/live/${cert_name}"
+    public_ip="$(letsencrypt_certificate_ip 2>/dev/null || true)"
+    is_public_ipv4 "$public_ip" || return 1
+    cert_name="$(letsencrypt_cert_name "$public_ip")"
+    source_dir="/etc/letsencrypt/live/${cert_name}"
     [ -s "$source_dir/fullchain.pem" ] || return 1
     [ -s "$source_dir/privkey.pem" ] || return 1
-    install_letsencrypt_certificate "$identifier" "$cert_name"
+    install_letsencrypt_certificate "$public_ip" "$cert_name"
 }
 
-issue_letsencrypt_certificate() {
-    local certbot="$1" identifier="$2" cert_name="$3" public_ip="$2"
-    if [ "${PANEL_MODE:-ip}" = "domain" ]; then
-        assert_letsencrypt_http_port_is_available
-        # Идентификатор доменного режима — это PANEL_HOST; certbot получает его
-        # напрямую, чтобы имя в заявке и в панели не могли разойтись.
-        if ! timeout 90 "$certbot" certonly --standalone --http-01-port "$LE_HTTP_PORT" \
-            --non-interactive --agree-tos --register-unsafely-without-email \
-            --domains "$PANEL_HOST" \
-            --cert-name "$cert_name" --keep-until-expiring >>"$LOG_FILE" 2>&1; then
-            die "Let’s Encrypt не подтвердил домен ${identifier}; смотрите ${LOG_FILE}. Проверьте A-запись и что порт ${LE_HTTP_PORT} доступен из интернета. Чтобы вернуть предыдущий режим, повторите установку, указав IP-адрес сервера"
-        fi
-        if ! install_letsencrypt_certificate "$identifier" "$cert_name"; then
-            die "Let’s Encrypt выдал сертификат для ${identifier}, но CSQTT не смог безопасно активировать его: проверьте свободное место в ${CSQTT_CONFIG_DIR}. Чтобы вернуть предыдущий режим, повторите установку, указав IP-адрес сервера"
-        fi
-        log_info "Let’s Encrypt сертификат активирован для домена ${identifier}"
-        return 0
-    fi
-    if [ -n "$(letsencrypt_http_port_listeners)" ]; then
+issue_letsencrypt_ip_certificate() {
+    local certbot="$1" public_ip="$2" cert_name="$3"
+    if ss -ltnH "sport = :${LE_HTTP_PORT}" 2>/dev/null | grep -q .; then
         log_warn "TCP/${LE_HTTP_PORT} уже занят другим сервисом; Let’s Encrypt IP-сертификат отложен, сохранён self-signed fallback"
         return 1
     fi
@@ -1883,11 +1527,11 @@ issue_letsencrypt_certificate() {
             return 1
         fi
     fi
-    if ! install_letsencrypt_certificate "$identifier" "$cert_name"; then
+    if ! install_letsencrypt_certificate "$public_ip" "$cert_name"; then
         log_warn "Let’s Encrypt выдал сертификат, но CSQTT не смог безопасно активировать его"
         return 1
     fi
-    log_info "Let’s Encrypt IP-сертификат активирован для ${identifier}"
+    log_info "Let’s Encrypt IP-сертификат активирован для ${public_ip}"
 }
 
 generate_rcgen_fallback_certificate() {
@@ -1932,9 +1576,7 @@ if [ -z "$CERTBOT" ] || ! "$CERTBOT" --version >/dev/null 2>&1; then
     fi
 fi
 CONFIG_DIR="${CSQTT_CONFIG_DIR:-/etc/csqtt}"
-LE_ROOT="${CSQTT_LE_ROOT:-/etc/letsencrypt}"
-LE_IDENTIFIER="${CSQTT_LE_IDENTIFIER:-}"
-STATE_FILE="${CONFIG_DIR}/letsencrypt.env"
+STATE_FILE="${CONFIG_DIR}/letsencrypt-ip.env"
 CERT_PATH="${CONFIG_DIR}/web_cert.pem"
 KEY_PATH="${CONFIG_DIR}/web_key.pem"
 RENEW_BEFORE_SECONDS="${CSQTT_LE_RENEW_BEFORE_SECONDS:-259200}"
@@ -1983,8 +1625,7 @@ public_ipv4() {
             return 0
         fi
     done
-    value="$(state_value IDENTIFIER 2>/dev/null || true)"
-    [ -n "$value" ] || value="$(state_value IP 2>/dev/null || true)"
+    value="$(state_value IP 2>/dev/null || true)"
     if is_public_ipv4 "$value"; then
         printf '%s\n' "$value"
         return 0
@@ -1993,72 +1634,9 @@ public_ipv4() {
 }
 
 state_value() {
-    local key="$1" value=""
-    if [ -f "$STATE_FILE" ]; then
-        value="$(sed -n "s/^${key}=//p" "$STATE_FILE" | head -n 1)"
-    fi
-    if [ -z "$value" ] && [ -f "${CONFIG_DIR}/letsencrypt-ip.env" ]; then
-        value="$(sed -n "s/^${key}=//p" "${CONFIG_DIR}/letsencrypt-ip.env" | head -n 1)"
-    fi
-    [ -n "$value" ] || return 1
-    printf '%s\n' "$value"
-}
-
-is_dns_name() {
-    local name="$1"
-    [ -n "$name" ] || return 1
-    [ "${#name}" -le 253 ] || return 1
-    case "$name" in
-        *[!A-Za-z0-9.-]*|.*|*.|*..*) return 1 ;;
-    esac
-    case "${name##*.}" in
-        *[A-Za-z]*) return 0 ;;
-    esac
-    return 1
-}
-
-# Режим читается из state; если state потерян, он выводится из идентификатора,
-# который передаёт юнит: адрес — IP-режим, имя — доменный. Пустой идентификатор
-# (старый юнит) даёт прежнее поведение IP-режима.
-panel_mode() {
-    local mode
-    mode="$(state_value MODE 2>/dev/null || true)"
-    if [ -n "$mode" ]; then
-        printf '%s\n' "$mode"
-        return 0
-    fi
-    if [ -n "$LE_IDENTIFIER" ] && ! is_public_ipv4 "$LE_IDENTIFIER"; then
-        printf 'domain\n'
-        return 0
-    fi
-    printf 'ip\n'
-}
-
-panel_identifier() {
-    local identifier
-    identifier="$(state_value IDENTIFIER 2>/dev/null || true)"
-    if [ -n "$identifier" ]; then
-        printf '%s\n' "$identifier"
-        return 0
-    fi
-    printf '%s\n' "$LE_IDENTIFIER"
-}
-
-current_identifier() {
-    if [ "$(panel_mode)" = "domain" ]; then
-        panel_identifier
-    else
-        public_ipv4
-    fi
-}
-
-cert_name_for() {
-    local mode="$1" identifier="$2"
-    if [ "$mode" = "domain" ]; then
-        printf 'csqtt-%s\n' "$identifier"
-    else
-        printf 'csqtt-ip-%s\n' "${identifier//./-}"
-    fi
+    local key="$1"
+    [ -f "$STATE_FILE" ] || return 1
+    sed -n "s/^${key}=//p" "$STATE_FILE" | head -n 1
 }
 
 certificate_is_csqtt_rcgen() {
@@ -2073,28 +1651,18 @@ certificate_is_csqtt_rcgen() {
 }
 
 certificate_is_csqtt_letsencrypt() {
-    local mode identifier cert_name issuer subject_alt_names
+    local saved_ip cert_name issuer subject_alt_names
     [ -s "$CERT_PATH" ] || return 1
     [ -s "$KEY_PATH" ] || return 1
     command -v openssl >/dev/null 2>&1 || return 1
-    mode="$(panel_mode)"
-    identifier="$(state_value IDENTIFIER 2>/dev/null || true)"
+    saved_ip="$(state_value IP 2>/dev/null || true)"
     cert_name="$(state_value CERT_NAME 2>/dev/null || true)"
-    if [ -z "$identifier" ] || [ -z "$cert_name" ]; then
-        subject_alt_names="$(openssl x509 -noout -ext subjectAltName -in "$CERT_PATH" 2>/dev/null || true)"
-        if [ "$mode" = "domain" ]; then
-            identifier="$(printf '%s\n' "$subject_alt_names" | sed -n -E 's/.*DNS:([A-Za-z0-9.-]+).*/\1/p' | head -n 1)"
-        else
-            identifier="$(printf '%s\n' "$subject_alt_names" | sed -n -E 's/.*(IP Address:|IP:)([0-9.]+).*/\2/p' | head -n 1)"
-        fi
-        cert_name="$(cert_name_for "$mode" "$identifier")"
+    if [ -z "$saved_ip" ] || [ -z "$cert_name" ]; then
+        saved_ip="$(openssl x509 -noout -ext subjectAltName -in "$CERT_PATH" 2>/dev/null | sed -n -E 's/.*(IP Address:|IP:)([0-9.]+).*/\2/p' | head -n 1)"
+        cert_name="csqtt-ip-${saved_ip//./-}"
     fi
-    if [ "$mode" = "domain" ]; then
-        is_dns_name "$identifier" || return 1
-    else
-        is_public_ipv4 "$identifier" || return 1
-    fi
-    [ "$cert_name" = "$(cert_name_for "$mode" "$identifier")" ] || return 1
+    is_public_ipv4 "$saved_ip" || return 1
+    [ "$cert_name" = "csqtt-ip-${saved_ip//./-}" ] || return 1
     issuer="$(openssl x509 -noout -issuer -nameopt RFC2253 -in "$CERT_PATH" 2>/dev/null || true)"
     issuer="${issuer#issuer=}"
     case "$issuer" in
@@ -2102,36 +1670,20 @@ certificate_is_csqtt_letsencrypt() {
         *) return 1 ;;
     esac
     subject_alt_names="$(openssl x509 -noout -ext subjectAltName -in "$CERT_PATH" 2>/dev/null || true)"
-    if [ "$mode" = "domain" ]; then
-        printf '%s\n' "$subject_alt_names" | grep -Fq "DNS:${identifier}"
-    else
-        printf '%s\n' "$subject_alt_names" | grep -Fq "IP Address:${identifier}" || printf '%s\n' "$subject_alt_names" | grep -Fq "IP:${identifier}"
-    fi
+    printf '%s\n' "$subject_alt_names" | grep -Fq "IP Address:${saved_ip}" || printf '%s\n' "$subject_alt_names" | grep -Fq "IP:${saved_ip}"
 }
 
 certificate_is_csqtt_managed() {
     certificate_is_csqtt_rcgen || certificate_is_csqtt_letsencrypt
 }
 
-# Пустой CSQTT_LE_IDENTIFIER — не расхождение: старый юнит переменную не
-# передаёт вовсе, и трактовка пустого значения как mismatch вызвала бы боевой
-# перевыпуск на пустом месте (а под set -u — падение).
 needs_renewal() {
-    local current="$1" saved_identifier
+    local current_ip="$1" saved_ip
     if certificate_is_csqtt_rcgen; then
         return 0
     fi
-    saved_identifier="$(state_value IDENTIFIER 2>/dev/null || true)"
-    if [ -z "$saved_identifier" ]; then
-        saved_identifier="$(state_value IP 2>/dev/null || true)"
-    fi
-    [ "$saved_identifier" = "$current" ] || return 0
-    if [ -z "$LE_IDENTIFIER" ]; then
-        log "Let’s Encrypt: юнит не передал CSQTT_LE_IDENTIFIER; сверка режима пропущена"
-    elif [ "$saved_identifier" != "$LE_IDENTIFIER" ]; then
-        log "Let’s Encrypt: идентификатор в состоянии (${saved_identifier}) расходится с ожидаемым (${LE_IDENTIFIER}); требуется перевыпуск"
-        return 0
-    fi
+    saved_ip="$(state_value IP 2>/dev/null || true)"
+    [ "$saved_ip" = "$current_ip" ] || return 0
     [ -s "$CERT_PATH" ] || return 0
     openssl x509 -noout -checkend "$RENEW_BEFORE_SECONDS" -in "$CERT_PATH" >/dev/null 2>&1 || return 0
     return 1
@@ -2182,20 +1734,18 @@ fallback_if_expired() {
 }
 
 install_certificate() {
-    local mode="$1" identifier="$2" cert_name="$3" source_dir cert_tmp key_tmp state_tmp
-    source_dir="${LE_ROOT}/live/${cert_name}"
+    local current_ip="$1" cert_name="$2" source_dir cert_tmp key_tmp state_tmp
+    source_dir="/etc/letsencrypt/live/${cert_name}"
     [ -s "$source_dir/fullchain.pem" ] && [ -s "$source_dir/privkey.pem" ] || return 1
     cert_tmp="$(mktemp "${CONFIG_DIR}/.web_cert.XXXXXX")" || return 1
     key_tmp="$(mktemp "${CONFIG_DIR}/.web_key.XXXXXX")" || { rm -f -- "$cert_tmp"; return 1; }
-    state_tmp="$(mktemp "${CONFIG_DIR}/.letsencrypt.XXXXXX")" || { rm -f -- "$cert_tmp" "$key_tmp"; return 1; }
+    state_tmp="$(mktemp "${CONFIG_DIR}/.letsencrypt-ip.XXXXXX")" || { rm -f -- "$cert_tmp" "$key_tmp"; return 1; }
     if ! install -m 0644 "$source_dir/fullchain.pem" "$cert_tmp" || ! install -m 0600 "$source_dir/privkey.pem" "$key_tmp"; then
         rm -f -- "$cert_tmp" "$key_tmp" "$state_tmp"
         return 1
     fi
-    printf 'MODE=%s\nIDENTIFIER=%s\nCERT_NAME=%s\n' "$mode" "$identifier" "$cert_name" > "$state_tmp"
+    printf 'IP=%s\nCERT_NAME=%s\n' "$current_ip" "$cert_name" > "$state_tmp"
     chmod 0600 "$state_tmp"
-    # State последним: при неудачной активации файлов состояние не должно
-    # объявлять режим, которому диск не соответствует.
     mv -f -- "$cert_tmp" "$CERT_PATH"
     mv -f -- "$key_tmp" "$KEY_PATH"
     mv -f -- "$state_tmp" "$STATE_FILE"
@@ -2212,61 +1762,45 @@ reload_csqtt_tls() {
 }
 
 main() {
-    local mode identifier cert_name
-    mode="$(panel_mode)"
-    # В доменном режиме без state нечего продлевать: самоподписанный откат
-    # запрещён, панель должна честно дождаться переустановки. Проверка идёт до
-    # разбора сертификата, иначе свой же старый сертификат был бы принят за
-    # пользовательский и причина молчания осталась бы невнятной.
-    if [ "$mode" = "domain" ] && [ ! -f "$STATE_FILE" ]; then
-        log "Let’s Encrypt: режим домена, но ${STATE_FILE} отсутствует; сертификат не обновляется. Повторите установку, чтобы восстановить состояние"
-        return 0
-    fi
+    local current_ip cert_name
     if [ -s "$CERT_PATH" ] && ! certificate_is_csqtt_managed; then
         log "Let’s Encrypt: обнаружен пользовательский TLS-сертификат; CSQTT не изменяет его и отключает собственное продление"
         return 0
     fi
-    identifier="$(current_identifier 2>/dev/null || true)"
+    current_ip="$(public_ipv4 2>/dev/null || true)"
     if [ -z "$CERTBOT" ] || [ ! -x "$CERTBOT" ]; then
         log "Let’s Encrypt: Certbot не найден, обновление отложено"
-        [ "$mode" = "domain" ] || fallback_if_expired "$identifier"
+        fallback_if_expired "$current_ip"
         return 0
     fi
-    if [ -z "$identifier" ]; then
-        log "Let’s Encrypt: публичный адрес не определён, обновление отложено"
-        [ "$mode" = "domain" ] || fallback_if_expired ""
+    if [ -z "$current_ip" ]; then
+        log "Let’s Encrypt: публичный IPv4 не определён, обновление отложено"
+        fallback_if_expired ""
         return 0
     fi
-    if ! needs_renewal "$identifier"; then
+    if ! needs_renewal "$current_ip"; then
         return 0
     fi
     if ss -ltnH "sport = :${HTTP_PORT}" 2>/dev/null | grep -q .; then
         log "Let’s Encrypt: TCP/${HTTP_PORT} занят, обновление отложено"
-        [ "$mode" = "domain" ] || fallback_if_expired "$identifier"
+        fallback_if_expired "$current_ip"
         return 0
     fi
-    cert_name="$(cert_name_for "$mode" "$identifier")"
-    if [ "$mode" = "domain" ]; then
-        if ! timeout 90 "$CERTBOT" certonly --standalone --http-01-port "$HTTP_PORT" --non-interactive --agree-tos --register-unsafely-without-email --domains "$identifier" --cert-name "$cert_name" --force-renewal; then
-            log "Let’s Encrypt: перевыпуск сертификата для домена ${identifier} не удался, текущий сертификат сохранён; исправьте причину и повторите установку"
+    cert_name="csqtt-ip-${current_ip//./-}"
+    if ! timeout 90 "$CERTBOT" certonly --standalone --http-01-port "$HTTP_PORT" --non-interactive --agree-tos --register-unsafely-without-email --preferred-profile shortlived --ip-address "$current_ip" --cert-name "$cert_name" --force-renewal; then
+        if ! timeout 90 "$CERTBOT" certonly --standalone --http-01-port "$HTTP_PORT" --non-interactive --agree-tos --register-unsafely-without-email --ip-address "$current_ip" --cert-name "$cert_name" --force-renewal; then
+            log "Let’s Encrypt: перевыпуск IP-сертификата не удался, текущий сертификат сохранён"
+            fallback_if_expired "$current_ip"
             return 0
         fi
-    else
-        if ! timeout 90 "$CERTBOT" certonly --standalone --http-01-port "$HTTP_PORT" --non-interactive --agree-tos --register-unsafely-without-email --preferred-profile shortlived --ip-address "$identifier" --cert-name "$cert_name" --force-renewal; then
-            if ! timeout 90 "$CERTBOT" certonly --standalone --http-01-port "$HTTP_PORT" --non-interactive --agree-tos --register-unsafely-without-email --ip-address "$identifier" --cert-name "$cert_name" --force-renewal; then
-                log "Let’s Encrypt: перевыпуск IP-сертификата не удался, текущий сертификат сохранён"
-                fallback_if_expired "$identifier"
-                return 0
-            fi
-        fi
     fi
-    if ! install_certificate "$mode" "$identifier" "$cert_name"; then
+    if ! install_certificate "$current_ip" "$cert_name"; then
         log "Let’s Encrypt: не удалось безопасно активировать новый сертификат"
-        [ "$mode" = "domain" ] || fallback_if_expired "$identifier"
+        fallback_if_expired "$current_ip"
         return 0
     fi
     reload_csqtt_tls
-    log "Let’s Encrypt: сертификат обновлён и TLS-конфигурация CSQTT перезагружена"
+    log "Let’s Encrypt: IP-сертификат обновлён и TLS-конфигурация CSQTT перезагружена"
 }
 
 main "$@"
@@ -2282,7 +1816,7 @@ install_letsencrypt_renewal_timer() {
     }
     cat > "/etc/systemd/system/${CSQTT_LE_SERVICE}" << LEUNIT
 [Unit]
-Description=Renew CSQTT Let’s Encrypt certificate
+Description=Renew CSQTT Let’s Encrypt IP certificate
 After=network-online.target
 Wants=network-online.target
 
@@ -2291,13 +1825,11 @@ Type=oneshot
 Environment=CSQTT_DEPLOY_MODE=${DEPLOY_MODE}
 Environment=CSQTT_LE_CERTBOT=${LE_CERTBOT_COMMAND}
 Environment=CSQTT_LE_RENEW_BEFORE_SECONDS=${LE_RENEW_BEFORE_SECONDS}
-Environment=CSQTT_LE_ROOT=${CSQTT_LE_ROOT}
-Environment=CSQTT_LE_IDENTIFIER=${PANEL_HOST:-}
 ExecStart=${CSQTT_LE_RENEW_HELPER}
 LEUNIT
     cat > "/etc/systemd/system/${CSQTT_LE_TIMER}" << LETIMER
 [Unit]
-Description=Check CSQTT Let’s Encrypt certificate lifetime
+Description=Check CSQTT Let’s Encrypt IP certificate lifetime
 
 [Timer]
 OnBootSec=5min
@@ -2316,36 +1848,10 @@ LETIMER
         log_warn "Не удалось включить автоматическое продление Let’s Encrypt"
 }
 
-# Доменный режим: сертификат Let’s Encrypt для PANEL_HOST на порту 443.
-# Любая неудача — die. Самоподписанного отката здесь нет: тихая подмена
-# сертификата в доменном режиме запрещена решением владельца 4.
-setup_domain_web_panel_tls() {
-    local identifier="${PANEL_HOST:-}" cert_name
-    if ! ensure_letsencrypt_client; then
-        die "Certbot с поддержкой --domains недоступен: без него нельзя выпустить сертификат для ${identifier}. Установите certbot и повторите установку. Чтобы вернуть предыдущий режим, повторите установку, указав IP-адрес сервера"
-    fi
-    write_letsencrypt_renewal_helper
-    assert_letsencrypt_http_port_is_available
-    if letsencrypt_certificate_is_current "$identifier"; then
-        log_info "Let’s Encrypt сертификат для домена ${identifier} действителен; перевыпуск не требуется"
-    else
-        cert_name="$(letsencrypt_cert_name "$identifier")"
-        issue_letsencrypt_certificate "$LE_CERTBOT_COMMAND" "$identifier" "$cert_name"
-    fi
-    # Легаси-файл удаляется только здесь, после успешной активации доменного
-    # сертификата. В сохраняемом списке его трогать нельзя: csqtt_cleanup снёс бы
-    # его раньше, чем появится letsencrypt.env. Удалять раньше тоже нельзя: при
-    # отказе выпуска IP-сертификат перестал бы узнаваться собственным, и откат
-    # в IP-режим оставил бы панель без продления. Таймер на это время остановлен
-    # в csqtt_cleanup, так что старый хелпер легаси-файл не прочитает.
-    rm -f -- "$CSQTT_CONFIG_DIR/letsencrypt-ip.env"
-    install_letsencrypt_renewal_timer
-}
-
-setup_web_panel_tls() {
+setup_letsencrypt_ip_tls() {
     local public_ip cert_name
     if ! certificate_is_csqtt_letsencrypt && adopt_letsencrypt_certificate; then
-        log_info "Let’s Encrypt-сертификат CSQTT принят под автоматическое продление"
+        log_info "Let’s Encrypt IP-сертификат CSQTT принят под автоматическое продление"
     fi
     if web_certificate_is_user_managed; then
         rm -f -- "$CSQTT_LE_STATE_FILE"
@@ -2353,17 +1859,9 @@ setup_web_panel_tls() {
         log_info "Используется заранее установленный TLS-сертификат пользователя; CSQTT сохраняет его и не заменяет Let’s Encrypt"
         return 0
     fi
-    if [ "${PANEL_MODE:-ip}" = "domain" ]; then
-        setup_domain_web_panel_tls
-        return 0
-    fi
-    migrate_legacy_letsencrypt_state || true
-    public_ip="${PANEL_HOST:-}"
-    if ! is_public_ipv4 "$public_ip"; then
-        public_ip="$(detect_public_ipv4 2>/dev/null || true)"
-    fi
+    public_ip="$(detect_public_ipv4 2>/dev/null || true)"
     if [ -z "$public_ip" ]; then
-        public_ip="$(state_value IDENTIFIER 2>/dev/null || true)"
+        public_ip="$(state_value IP 2>/dev/null || true)"
     fi
     if ! ensure_letsencrypt_client; then
         if [ ! -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || ! openssl x509 -noout -checkend 0 -in "$CSQTT_CONFIG_DIR/web_cert.pem" >/dev/null 2>&1; then
@@ -2372,7 +1870,6 @@ setup_web_panel_tls() {
         return 0
     fi
     write_letsencrypt_renewal_helper
-    rm -f -- "$CSQTT_CONFIG_DIR/letsencrypt-ip.env"
     if [ -z "$public_ip" ]; then
         log_warn "Публичный IPv4 не определён; WEB-панель временно останется на self-signed TLS"
         if [ ! -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || ! openssl x509 -noout -checkend 0 -in "$CSQTT_CONFIG_DIR/web_cert.pem" >/dev/null 2>&1; then
@@ -2385,24 +1882,13 @@ setup_web_panel_tls() {
         log_info "Let’s Encrypt IP-сертификат действителен; перевыпуск не требуется"
     else
         cert_name="$(letsencrypt_cert_name "$public_ip")"
-        if ! issue_letsencrypt_certificate "$LE_CERTBOT_COMMAND" "$public_ip" "$cert_name"; then
+        if ! issue_letsencrypt_ip_certificate "$LE_CERTBOT_COMMAND" "$public_ip" "$cert_name"; then
             if [ ! -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || ! openssl x509 -noout -checkend 0 -in "$CSQTT_CONFIG_DIR/web_cert.pem" >/dev/null 2>&1; then
                 generate_rcgen_fallback_certificate "$public_ip" || true
             fi
         fi
     fi
     install_letsencrypt_renewal_timer
-}
-
-# Две дешёвые проверки доменного режима. Выполняются ДО csqtt_cleanup: если порт
-# 80 занят или certbot не умеет --domains, установка падает, не трогая
-# работающую панель.
-run_domain_mode_preflight() {
-    [ "${PANEL_MODE:-}" = "domain" ] || return 0
-    assert_letsencrypt_http_port_is_available
-    if ! ensure_letsencrypt_client; then
-        die "Certbot с поддержкой --domains недоступен: без него нельзя выпустить сертификат для ${PANEL_HOST}. Установите certbot и повторите установку. Чтобы вернуть предыдущий режим, повторите установку, указав IP-адрес сервера"
-    fi
 }
 
 verify_web_panel() {
@@ -2695,7 +2181,13 @@ done
     log_info "Docker runtime проверен: TUN/netfilter"
 }
 
-run_csqtt_docker_container() {
+start_csqtt_docker() {
+    prog 0.90 "Запуск Docker..."
+    ensure_tun_device
+    remove_all_csqtt_docker_containers
+    assert_peer_port_is_available
+    remove_csqtt_tun_interface || die "Не удалось освободить TUN-интерфейс $CSQTT_IFACE перед запуском Docker"
+
     docker run -d \
         --name "$CSQTT_DOCKER_CONTAINER" \
         --label com.csqtt.managed=true \
@@ -2705,7 +2197,6 @@ run_csqtt_docker_container() {
         --cap-drop ALL \
         --cap-add NET_ADMIN \
         --cap-add NET_RAW \
-        --cap-add NET_BIND_SERVICE \
         --device /dev/net/tun:/dev/net/tun \
         --security-opt seccomp=unconfined \
         --stop-timeout 5 \
@@ -2720,35 +2211,6 @@ run_csqtt_docker_container() {
         --web-port "$WEB_PORT" \
         --config-dir "$CSQTT_CONFIG_DIR" >>"$LOG_FILE" 2>&1 || \
         die "Не удалось создать Docker-контейнер CSQTT"
-}
-
-print_docker_deploy_summary() {
-    local main_pid="$1"
-    echo ""
-    echo "✓ Деплой успешно завершён"
-    echo "CSQTT_DEPLOY_OK"
-    echo "   Режим:      Docker"
-    echo "   Бинарник:   /usr/local/bin/csqtt"
-    echo "   Конфиг:     ${CSQTT_CONFIG_DIR}"
-    echo "   Контейнер:  ${CSQTT_DOCKER_CONTAINER}"
-    echo "   Образ:      ${CSQTT_DOCKER_IMAGE}"
-    echo "   PEER:       порт ${PEER_PORT}"
-    echo "   SSH:        порт ${SSH_PORT}"
-    echo "   WEB:        $(panel_web_port_label)"
-    echo "   PID:        ${main_pid}"
-    echo "   Логи:       docker logs -f ${CSQTT_DOCKER_CONTAINER}"
-    echo "   Статус:     docker ps --filter name=${CSQTT_DOCKER_CONTAINER}"
-    echo ""
-}
-
-start_csqtt_docker() {
-    prog 0.90 "Запуск Docker..."
-    ensure_tun_device
-    remove_all_csqtt_docker_containers
-    assert_peer_port_is_available
-    remove_csqtt_tun_interface || die "Не удалось освободить TUN-интерфейс $CSQTT_IFACE перед запуском Docker"
-
-    run_csqtt_docker_container
 
     local state running main_pid restarts candidate_pid=0 candidate_restarts=0 found=0
     local attempts=0
@@ -2785,7 +2247,21 @@ start_csqtt_docker() {
     verify_web_panel
     finish_deployment
     prog 1.0 "Готово!"
-    print_docker_deploy_summary "$candidate_pid"
+    echo ""
+    echo "✓ Деплой успешно завершён"
+    echo "CSQTT_DEPLOY_OK"
+    echo "   Режим:      Docker"
+    echo "   Бинарник:   /usr/local/bin/csqtt"
+    echo "   Конфиг:     ${CSQTT_CONFIG_DIR}"
+    echo "   Контейнер:  ${CSQTT_DOCKER_CONTAINER}"
+    echo "   Образ:      ${CSQTT_DOCKER_IMAGE}"
+    echo "   PEER:       порт ${PEER_PORT}"
+    echo "   SSH:        порт ${SSH_PORT}"
+    echo "   WEB:        порт ${WEB_PORT}"
+    echo "   PID:        ${candidate_pid}"
+    echo "   Логи:       docker logs -f ${CSQTT_DOCKER_CONTAINER}"
+    echo "   Статус:     docker ps --filter name=${CSQTT_DOCKER_CONTAINER}"
+    echo ""
 }
 
 setup_csqtt_service() {
@@ -2847,27 +2323,6 @@ diagnose_systemd_failure() {
     done <<< "$props"
     log_error "systemd: active=$active/$sub result=$result code=$exec_code status=$exec_status restarts=$restarts pid=$pid"
     journalctl -u csqtt -b -n 50 --no-pager 2>/dev/null | sed 's/^/   >> /' | tee -a "$LOG_FILE" || true
-}
-
-print_systemd_deploy_summary() {
-    local main_pid="$1"
-    echo ""
-    echo "══════════════════════════════════════════════════════════════"
-    echo "✓ Деплой успешно завершён"
-    echo "CSQTT_DEPLOY_OK"
-    echo "   Режим: systemd"
-    echo "   Бинарник: /usr/local/bin/csqtt"
-    echo "   Unit: /etc/systemd/system/csqtt.service"
-    echo "   Конфиг: ${CSQTT_CONFIG_DIR}"
-    echo "   NAT:  MASQUERADE (восстанавливается после reboot)"
-    echo "   PEER: порт ${PEER_PORT}"
-    echo "   SSH:  порт ${SSH_PORT}"
-    echo "   WEB:  $(panel_web_port_label)"
-    echo "   PID:  ${main_pid}"
-    echo "   Логи:   journalctl -u csqtt -f"
-    echo "   Статус: systemctl status csqtt"
-    echo "══════════════════════════════════════════════════════════════"
-    echo ""
 }
 
 start_csqtt() {
@@ -2942,7 +2397,23 @@ start_csqtt() {
     finish_deployment
 
     prog 1.0 "Готово!"
-    print_systemd_deploy_summary "$candidate_pid"
+    echo ""
+    echo "══════════════════════════════════════════════════════════════"
+    echo "✓ Деплой успешно завершён"
+    echo "CSQTT_DEPLOY_OK"
+    echo "   Режим: systemd"
+    echo "   Бинарник: /usr/local/bin/csqtt"
+    echo "   Unit: /etc/systemd/system/csqtt.service"
+    echo "   Конфиг: ${CSQTT_CONFIG_DIR}"
+    echo "   NAT:  MASQUERADE (восстанавливается после reboot)"
+    echo "   PEER: порт ${PEER_PORT}"
+    echo "   SSH:  порт ${SSH_PORT}"
+    echo "   WEB:  порт ${WEB_PORT}"
+    echo "   PID:  ${candidate_pid}"
+    echo "   Логи:   journalctl -u csqtt -f"
+    echo "   Статус: systemctl status csqtt"
+    echo "══════════════════════════════════════════════════════════════"
+    echo ""
 }
 
 do_uninstall() {
@@ -3024,15 +2495,19 @@ handle_unexpected_error() {
 trap 'handle_unexpected_error "$LINENO" "$?"' ERR
 
 main() {
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║       CSQTT VPN Server — Installer v${SCRIPT_VERSION}                    ║"
+    echo "║       PEER: ${PEER_PORT}  |  SSH: ${SSH_PORT}  | WEB: ${WEB_PORT}       ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+
     local action="${1:-install}"
     check_root
     mkdir -p "$(dirname "$LOG_FILE")"
     echo "=== CSQTT Installer v${SCRIPT_VERSION} — $(date) ===" >> "$LOG_FILE"
 
     case "$action" in
-        status|--status|-s)       print_installer_header; do_status ;;
+        status|--status|-s)       do_status ;;
         uninstall|--uninstall|-u)
-            print_installer_header
             DEPLOY_PHASE="validation"
             validate_port "CSQTT_PEER_PORT" "$PEER_PORT"
             do_uninstall
@@ -3045,10 +2520,6 @@ main() {
             esac
             validate_port "CSQTT_PEER_PORT" "$PEER_PORT"
             validate_port "CSQTT_SSH_PORT" "$SSH_PORT"
-            resolve_panel_mode
-            # Баннер печатается после разбора режима: до него WEB_PORT ещё
-            # равен значению телефона и в доменном режиме показывал бы 46002.
-            print_installer_header
             validate_port "CSQTT_WEB_PORT" "$WEB_PORT"
             validate_positive_seconds "CSQTT_DOCKER_BUILD_TIMEOUT_SECONDS" "$DOCKER_BUILD_TIMEOUT_SECONDS"
             validate_distinct_network_ports
@@ -3068,7 +2539,6 @@ main() {
             if [ "$DEPLOY_MODE" = "docker" ]; then
                 run_timed "Docker preflight" prepare_docker_candidate "$UPLOAD_BINARY"
             fi
-            run_domain_mode_preflight
             DEPLOY_PHASE="cutover"
             run_timed "переключение runtime" csqtt_cleanup
             run_timed "preflight" run_platform_preflight
@@ -3076,15 +2546,10 @@ main() {
             run_timed "NAT/firewall" setup_nat_and_firewall
             install_network_helper
             setup_csqtt_environment
-            run_timed "Let’s Encrypt" setup_web_panel_tls
+            run_timed "Let’s Encrypt" setup_letsencrypt_ip_tls
             DEPLOY_PHASE="activation"
             run_timed "бинарник" setup_csqtt_binary
             run_timed "принудительная остановка" force_stop_csqtt_processes
-            # Порт панели проверяется после остановки старого runtime и до попытки
-            # его занять. В docker-режиме контейнер стартует в setup_csqtt_docker,
-            # и без этой проверки занятый 443 дал бы невнятный crash-loop вместо
-            # прямого сообщения о занятом порте.
-            assert_web_port_is_available
             if [ "$DEPLOY_MODE" = "docker" ]; then
                 run_timed "Docker activation" setup_csqtt_docker
             else
@@ -3097,6 +2562,4 @@ main() {
     esac
 }
 
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    main "$@"
-fi
+main "$@"

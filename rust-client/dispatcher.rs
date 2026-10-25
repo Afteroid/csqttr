@@ -320,9 +320,7 @@ impl UplinkState {
 
     fn evict_flows(&mut self, now: std::time::Instant) {
         self.flow_evict_counter = self.flow_evict_counter.wrapping_add(1);
-        if !self.flow_evict_counter.is_multiple_of(FLOW_EVICT_EVERY)
-            && self.flows.len() < FLOW_TABLE_MAX
-        {
+        if self.flow_evict_counter % FLOW_EVICT_EVERY != 0 && self.flows.len() < FLOW_TABLE_MAX {
             return;
         }
         self.flows

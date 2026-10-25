@@ -103,7 +103,7 @@ struct Args {
         long,
         env = "CSQTT_PUBLIC_IP",
         default_value = "",
-        help = "Внешний адрес (IP или домен) сервера для клиентских ссылок"
+        help = "Внешний IPv4-адрес сервера для клиентских ссылок"
     )]
     public_ip: String,
 
