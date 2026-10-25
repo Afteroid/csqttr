@@ -1961,9 +1961,14 @@ object TunnelManager {
                     ipIsWhitelist = newServerRule.ipIsWhite,
                     directIps = newServerRule.ips.joinToString(","),
                 )
+                // the VPN's excludeRoutes come from ips/ipIsWhite too: a change there alone (App routing from the panel)
+                // left stale routes until a reconnect
                 val vpnInputsChanged = previousRule == null ||
                     previousRule.isWhite != newServerRule.isWhite ||
-                    previousRule.packages.toSet() != newServerRule.packages.toSet()
+                    previousRule.packages.toSet() != newServerRule.packages.toSet() ||
+                    previousRule.ipIsWhite != newServerRule.ipIsWhite ||
+                    // only a blacklist's IPs become VPN routes (excludeRoute); a whitelist's list changes no route
+                    (!newServerRule.ipIsWhite && previousRule.ips.toSet() != newServerRule.ips.toSet())
                 if (vpnReady.value && vpnInputsChanged) {
                     val reloadIntent = Intent(ctx, TunVpnService::class.java).apply {
                         action = "RELOAD_ROUTING"
@@ -1982,12 +1987,11 @@ object TunnelManager {
                     val templateEnabled = settingsStore.templateDomainsEnabled.first()
                     val domains = if (domainWhite) settingsStore.directDomainsWhite.first() else settingsStore.directDomainsBlack.first()
                     val ipWhite = settingsStore.ipIsWhitelist.first()
-                    val ipEnabled = settingsStore.ipRoutingEnabled.first()
                     val ips = if (ipWhite) settingsStore.directIpsWhite.first() else settingsStore.directIpsBlack.first()
                     val hasDomains = if (domainWhite) domains.isNotBlank() else (domains.isNotBlank() || templateEnabled || excludeRu)
                     val effectiveDomainEnabled = domainEnabled && hasDomains
                     val hasIps = ips.isNotBlank()
-                    val effectiveIpEnabled = ipEnabled && hasIps
+                    val effectiveIpEnabled = hasIps   // the list is the switch (TunVpnService)
                     updateDomainRouting(
                         enabled = effectiveDomainEnabled,
                         excludeRuZones = if (domainWhite) false else excludeRu,
@@ -2037,12 +2041,11 @@ object TunnelManager {
             val templateEnabled = settingsStore.templateDomainsEnabled.first()
             val domains = if (domainWhite) settingsStore.directDomainsWhite.first() else settingsStore.directDomainsBlack.first()
             val ipWhite = settingsStore.ipIsWhitelist.first()
-            val ipEnabled = settingsStore.ipRoutingEnabled.first()
             val ips = if (ipWhite) settingsStore.directIpsWhite.first() else settingsStore.directIpsBlack.first()
             val hasDomains = if (domainWhite) domains.isNotBlank() else (domains.isNotBlank() || templateEnabled || excludeRu)
             val effectiveDomainEnabled = domainEnabled && hasDomains
             val hasIps = ips.isNotBlank()
-            val effectiveIpEnabled = ipEnabled && hasIps
+            val effectiveIpEnabled = hasIps   // the list is the switch (TunVpnService)
             updateDomainRouting(
                 enabled = effectiveDomainEnabled,
                 excludeRuZones = if (domainWhite) false else excludeRu,
