@@ -29,6 +29,7 @@ mod packet;
 mod path_probe;
 mod protocol;
 mod proxy_route;
+mod swgpanel;
 mod tokio_io;
 mod tproxy;
 mod tun_device;
@@ -158,6 +159,42 @@ struct Args {
         help = "Число последних DPI-записей"
     )]
     samples: usize,
+
+    // ── swg-panel integration flags (all optional; absent → stock csqtt behaviour) ──
+    #[arg(long, help = "swg-panel: TUN interface name for multi-instance (stock: csqtt1)")]
+    iface: Option<String>,
+    #[arg(
+        long = "tun-addr",
+        help = "swg-panel: TUN gateway CIDR /24, e.g. 10.66.68.1/24 (stock: 10.66.67.1/24)"
+    )]
+    tun_addr: Option<String>,
+    #[arg(
+        long = "no-nat",
+        default_value_t = false,
+        help = "swg-panel: the node owns forwarding, NAT and the firewall — set no host sysctls and install no FORWARD/MASQUERADE rules"
+    )]
+    no_nat: bool,
+    #[arg(
+        long = "no-web",
+        default_value_t = false,
+        help = "swg-panel: run headless — no web admin panel (it binds 0.0.0.0), no TLS cert, and no DPI/syscalls monitor sockets; the panel owns all state via --desired"
+    )]
+    headless: bool,
+    #[arg(
+        long,
+        help = "swg-panel: declarative desired-passwords JSON, panel-owned (SIGHUP/mtime reload, no restart)"
+    )]
+    desired: Option<std::path::PathBuf>,
+    #[arg(
+        long = "max-passwords",
+        help = "swg-panel: accepted but inert since 2.5 (no password cap; the address pool bounds it); kept so installed units keep starting"
+    )]
+    max_passwords: Option<usize>,
+    #[arg(
+        long,
+        help = "this server's name on the host (stock: csqtt) — its systemd unit, netfilter tags, local-proxy table/mark and session cookie; a second server next to a stock one runs as e.g. csqtt25"
+    )]
+    instance: Option<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -619,14 +656,15 @@ async fn web_tls_reload_loop(
 fn run_systemctl(action: &str) -> Result<()> {
     if std::env::var("CSQTT_SERVICE_MANAGER").is_ok_and(|value| value == "docker") {
         if action != "restart" {
-            bail!("для управления контейнером используйте docker start/stop csqtt");
+            bail!("для управления контейнером используйте docker start/stop {}", swgpanel::instance());
         }
         #[cfg(unix)]
         {
             let init_exe = std::fs::read_link("/proc/1/exe").ok();
             if init_exe.is_none() || init_exe != std::env::current_exe().ok() {
                 bail!(
-                    "PID 1 контейнера не является этим процессом; выполните docker restart csqtt"
+                    "PID 1 контейнера не является этим процессом; выполните docker restart {}",
+                    swgpanel::instance()
                 );
             }
             if unsafe { libc::kill(1, libc::SIGTERM) } == 0 {
@@ -641,15 +679,17 @@ fn run_systemctl(action: &str) -> Result<()> {
     #[cfg(unix)]
     {
         if unsafe { libc_geteuid() } != 0 {
-            bail!("для управления службой csqtt нужны права root");
+            bail!("для управления службой {} нужны права root", swgpanel::instance());
         }
     }
-    println!("[CLI] Выполняется systemctl {action} csqtt...");
+    // the unit THIS server runs as: a side instance's restart must never restart the stock server next to it
+    let unit = swgpanel::instance();
+    println!("[CLI] Выполняется systemctl {action} {unit}...");
     let mut command = std::process::Command::new("systemctl");
     if action == "restart" {
         command.arg("--no-block");
     }
-    let status = command.args([action, "csqtt"]).status();
+    let status = command.args([action, unit]).status();
     match status {
         Ok(s) if s.success() => {
             println!("[CLI] Готово");
@@ -670,7 +710,7 @@ static PANEL_RESTART_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 pub(crate) fn request_service_restart() -> Result<()> {
     if std::env::var("CSQTT_SERVICE_MANAGER").is_ok_and(|value| value == "systemd") {
         let sequence = PANEL_RESTART_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let unit = format!("csqtt-panel-restart-{}-{sequence}", std::process::id());
+        let unit = format!("{}-panel-restart-{}-{sequence}", swgpanel::instance(), std::process::id());
         let status = std::process::Command::new("systemd-run")
             .arg("--quiet")
             .arg(format!("--unit={unit}"))
@@ -678,7 +718,7 @@ pub(crate) fn request_service_restart() -> Result<()> {
             .arg("--timer-property=AccuracySec=100ms")
             .arg("--collect")
             .arg("/usr/bin/systemctl")
-            .args(["--no-block", "restart", "csqtt"])
+            .args(["--no-block", "restart", swgpanel::instance()])
             .status()
             .context("schedule delayed systemd restart with systemd-run")?;
         if status.success() {
@@ -968,6 +1008,16 @@ async fn async_main() -> Result<()> {
         let cmd = args_vec[1].as_str();
         match cmd {
             "start" | "stop" | "restart" => {
+                // The short form names no instance, so it is the stock server's: only a binary installed as `csqtt`
+                // takes it. A second server's binary (csqtt25) running `systemctl restart csqtt` would restart the
+                // stock server next to it.
+                let exe = std::path::Path::new(&args_vec[0])
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if exe != swgpanel::DEFAULT_INSTANCE {
+                    bail!("укажите сервер: {exe} --instance <имя> --{cmd}");
+                }
                 return run_systemctl(cmd);
             }
             "dpi" => {
@@ -988,6 +1038,29 @@ async fn async_main() -> Result<()> {
         return Ok(());
     }
 
+    // swg-panel: lock in the per-instance config (instance/iface/subnet/desired) before anything reads it — the
+    // --start/--stop/--restart below act on this instance's unit, so it must be known before them.
+    let _ = args.max_passwords;
+    swgpanel::init(swgpanel::build(
+        args.iface.clone(),
+        args.tun_addr.clone(),
+        args.no_nat,
+        args.headless,
+        args.desired.clone(),
+        args.instance.clone(),
+    )?);
+
+    // As the short form above: without --instance the flag names the stock server's unit, which only a binary
+    // installed as `csqtt` may act on (`csqtt25 --restart` restarted the stock server next to it).
+    if (args.start || args.stop || args.restart) && args.instance.is_none() {
+        let exe = std::env::args()
+            .next()
+            .and_then(|a| std::path::Path::new(&a).file_name().and_then(|n| n.to_str()).map(str::to_owned))
+            .unwrap_or_default();
+        if exe != swgpanel::DEFAULT_INSTANCE {
+            bail!("укажите сервер: {exe} --instance <имя> --start|--stop|--restart");
+        }
+    }
     if args.start {
         return run_systemctl("start");
     }
@@ -1092,7 +1165,10 @@ async fn async_main() -> Result<()> {
 
     let web_pass = if args.web_pass.is_empty() {
         let value = random_password() + &random_password();
-        println!("[INIT] generated web password: {value}");
+        // swg-panel: headless runs no web panel, so this password opens nothing — and a secret has no place in the journal.
+        if !swgpanel::headless() {
+            println!("[INIT] generated web password: {value}");
+        }
         value
     } else {
         args.web_pass
@@ -1182,7 +1258,7 @@ async fn async_main() -> Result<()> {
         });
     }
 
-    log_event(&app, "INFO", "SYSTEM", " CSQTT Server 2.5.0");
+    log_event(&app, "INFO", "SYSTEM", " CSQTT Server 2.5.2 (SanityProtocol build of amurcanov 2.5.0)");
     log_event(
         &app,
         "INFO",
@@ -1190,85 +1266,114 @@ async fn async_main() -> Result<()> {
         &format!(" RTP AEAD: {}", app.listen),
     );
     log_event(&app, "INFO", "SYSTEM", " Tunnel: Userspace TUN (CSQTT)");
-    log_event(
-        &app,
-        "INFO",
-        "SYSTEM",
-        &format!(" Web: 0.0.0.0:{}", app.web_port),
-    );
+    // swg-panel: headless binds no web port — say so rather than name an address nothing listens on.
+    let web_line = if swgpanel::headless() {
+        " Web: off (--no-web)".to_owned()
+    } else {
+        format!(" Web: 0.0.0.0:{}", app.web_port)
+    };
+    log_event(&app, "INFO", "SYSTEM", &web_line);
 
     let web_app = app.clone();
-    let diagnostic_app = app.clone();
 
-    tokio::spawn(async move {
-        if let Err(e) = protocol::run_dpi_server().await {
-            eprintln!("[DPI] Server listener error: {e}");
-        }
-    });
-
-    tokio::spawn(async move {
-        if let Err(e) = protocol::run_syscalls_server(diagnostic_app).await {
-            eprintln!("[SYSCALLS] Server listener error: {e}");
-        }
-    });
-
-    tokio::spawn(auto_restart_loop(app.clone(), auto_restart_interval_rx));
-
-    let cert_path = app.config_dir.join("web_cert.pem");
-    let key_path = app.config_dir.join("web_key.pem");
-    if !cert_path.exists() && !key_path.exists() {
-        let mut subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-        if let Ok(hostname) = std::fs::read_to_string("/etc/hostname") {
-            let hostname = hostname.trim().to_string();
-            if !hostname.is_empty() {
-                subject_alt_names.push(hostname);
+    // swg-panel: the DPI (46003) + syscalls (46004) sockets only serve csqtt's own `dpi`/`syscalls` monitor
+    // CLIs, which we never use; their fixed loopback ports also collide on a multi-instance node.
+    if !swgpanel::headless() {
+        let diagnostic_app = app.clone();
+        tokio::spawn(async move {
+            if let Err(e) = protocol::run_dpi_server().await {
+                eprintln!("[DPI] Server listener error: {e}");
             }
-        }
-        if let Ok(probe) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            let _ = probe.set_nonblocking(true);
-            if probe.connect("8.8.8.8:53").is_ok()
-                && let Ok(addr) = probe.local_addr()
-                && !addr.ip().is_loopback()
-            {
-                subject_alt_names.push(addr.ip().to_string());
+        });
+
+        tokio::spawn(async move {
+            if let Err(e) = protocol::run_syscalls_server(diagnostic_app).await {
+                eprintln!("[SYSCALLS] Server listener error: {e}");
             }
-        }
-        if let Ok(cert) = rcgen::generate_simple_self_signed(subject_alt_names) {
-            let cert_pem = cert.cert.pem();
-            let key_pem = cert.key_pair.serialize_pem();
-            let _ = tokio::fs::write(&cert_path, cert_pem).await;
-            let _ = tokio::fs::write(&key_path, key_pem).await;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ =
-                    tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
-                        .await;
-            }
-        }
-    } else if !cert_path.exists() || !key_path.exists() {
-        anyhow::bail!(
-            "incomplete WEB TLS certificate pair in {}; restore both web_cert.pem and web_key.pem",
-            app.config_dir.display()
-        );
+        });
     }
 
-    let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
-        .await
-        .context("load web cert")?;
+    // swg-panel: headless has no web panel to set the interval, and its unit (swg-noded's) restarts only on failure —
+    // a scheduled self-restart (a clean exit 0) from a copied or adopted store would leave the server down for good
+    if !swgpanel::headless() {
+        tokio::spawn(auto_restart_loop(app.clone(), auto_restart_interval_rx));
+    }
 
-    #[cfg(unix)]
-    tokio::spawn(web_tls_reload_loop(
-        tls_config.clone(),
-        cert_path.clone(),
-        key_path.clone(),
-    ));
+    // swg-panel: headless (--no-web) runs no web admin panel, so skip its self-signed cert generation,
+    // the TLS config it loads and the reload loop that watches it — all three exist only to serve that
+    // panel, which binds 0.0.0.0 and is redundant where the swg-panel owns state via --desired.
+    let tls_config = if swgpanel::headless() {
+        None
+    } else {
+        let cert_path = app.config_dir.join("web_cert.pem");
+        let key_path = app.config_dir.join("web_key.pem");
+        if !cert_path.exists() && !key_path.exists() {
+            let mut subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+            if let Ok(hostname) = std::fs::read_to_string("/etc/hostname") {
+                let hostname = hostname.trim().to_string();
+                if !hostname.is_empty() {
+                    subject_alt_names.push(hostname);
+                }
+            }
+            if let Ok(probe) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                let _ = probe.set_nonblocking(true);
+                if probe.connect("8.8.8.8:53").is_ok()
+                    && let Ok(addr) = probe.local_addr()
+                    && !addr.ip().is_loopback()
+                {
+                    subject_alt_names.push(addr.ip().to_string());
+                }
+            }
+            if let Ok(cert) = rcgen::generate_simple_self_signed(subject_alt_names) {
+                let cert_pem = cert.cert.pem();
+                let key_pem = cert.key_pair.serialize_pem();
+                let _ = tokio::fs::write(&cert_path, cert_pem).await;
+                let _ = tokio::fs::write(&key_path, key_pem).await;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ =
+                        tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+                            .await;
+                }
+            }
+        } else if !cert_path.exists() || !key_path.exists() {
+            anyhow::bail!(
+                "incomplete WEB TLS certificate pair in {}; restore both web_cert.pem and web_key.pem",
+                app.config_dir.display()
+            );
+        }
+
+        let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
+            .await
+            .context("load web cert")?;
+
+        #[cfg(unix)]
+        tokio::spawn(web_tls_reload_loop(
+            tls_config.clone(),
+            cert_path.clone(),
+            key_path.clone(),
+        ));
+
+        Some(tls_config)
+    };
 
     let protocol_runtime = protocol::start(app.clone()).await?;
     let mut protocol_status = protocol_runtime.status_receiver();
-    let mut web_task = tokio::spawn(async move { web_panel::run(web_app, tls_config).await });
+    let mut web_task = match tls_config {
+        // swg-panel: a never-completing task fills the web_task slot under --no-web so the select! below
+        // keeps its shape — its "web server stopped" arm simply never fires.
+        None => tokio::spawn(async { std::future::pending::<anyhow::Result<()>>().await }),
+        Some(tls_config) => tokio::spawn(async move { web_panel::run(web_app, tls_config).await }),
+    };
     tokio::spawn(protocol::session_janitor(app.clone()));
-    tokio::spawn(protocol::password_janitor(app.clone()));
+    // swg-panel: under --desired the panel owns expiry (it rewrites desired.json), so csqtt's own expiry
+    // janitor is disabled to avoid two writers pruning the same set. Without --desired it runs as stock.
+    if let Some(desired) = swgpanel::desired_path().cloned() {
+        tokio::spawn(swgpanel_desired_loop(app.clone(), desired));
+    } else {
+        tokio::spawn(protocol::password_janitor(app.clone()));
+    }
     tokio::spawn(password_epoch_sweeper(app.clone()));
 
     tokio::spawn(cpu_loop(app.clone()));
@@ -1346,6 +1451,274 @@ async fn async_main() -> Result<()> {
     match terminal_error {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+// ── swg-panel: declarative desired-passwords reconcile (panel owns the set; csqtt owns address/traffic) ──
+#[derive(serde::Deserialize, Default)]
+struct SwgDesiredFile {
+    #[serde(default)]
+    passwords: Vec<SwgDesiredPw>,
+    // One routing rule for every password of this server (the panel's App routing). Absent → no rule.
+    #[serde(default)]
+    app_routing: Option<SwgAppRouting>,
+}
+
+// The panel's App routing, in its own words; mapped onto csqtt's RoutingRule by swgpanel_app_rule. The panel validates it
+// (a "tunnel"/"only" mode always carries a list) — upstream validates nothing.
+#[derive(serde::Deserialize, Default, Clone)]
+struct SwgAppRouting {
+    #[serde(default)]
+    apps_mode: String, // "all" | "except" | "only"
+    #[serde(default)]
+    packages: Vec<String>,
+    #[serde(default)]
+    domains_mode: String, // "direct" (blacklist: the listed bypass the tunnel) | "tunnel" (whitelist: only the listed use it)
+    #[serde(default)]
+    domains: Vec<String>,
+    #[serde(default)]
+    template_domains: bool,
+    #[serde(default)]
+    ips_mode: String, // "direct" | "tunnel"
+    #[serde(default)]
+    ips: Vec<String>,
+}
+
+const SWG_RULE_ID: &str = "swg";
+
+// A per-password rule's id: "swg-" + 16 hex of SHA-256 over the rule's content, so passwords asking for the same rule share
+// one row, and an unchanged rule keeps its id across reconciles (no churn in the store).
+fn swgpanel_rule_id(rule: &model::RoutingRule) -> String {
+    use sha2::{Digest, Sha256};
+    let mut keyed = rule.clone();
+    keyed.id.clear();
+    let digest = Sha256::digest(serde_json::to_vec(&keyed).unwrap_or_default());
+    format!("swg-{}", hex::encode(&digest[..8]))
+}
+
+// The rule the panel's App routing asks for, or None when it asks for nothing (no rule is sent at all then).
+fn swgpanel_app_rule(r: &SwgAppRouting) -> Option<model::RoutingRule> {
+    let only_apps = r.apps_mode == "only";
+    let packages = if r.apps_mode == "except" || only_apps { r.packages.clone() } else { Vec::new() };
+    let domains_whitelist = r.domains_mode == "tunnel";
+    let template = r.template_domains && !domains_whitelist; // the built-in list is a direct list
+    let ips_whitelist = r.ips_mode == "tunnel";
+    if packages.is_empty() && !only_apps && r.domains.is_empty() && !template && !domains_whitelist
+        && r.ips.is_empty() && !ips_whitelist
+    {
+        return None;
+    }
+    Some(model::RoutingRule {
+        id: SWG_RULE_ID.to_owned(),
+        name: "swg-panel".to_owned(),
+        is_whitelist: only_apps,
+        packages,
+        template_domains: template,
+        direct_domains: r.domains.clone(),
+        domains_is_whitelist: domains_whitelist,
+        ip_is_whitelist: ips_whitelist,
+        ips: r.ips.clone(),
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct SwgDesiredPw {
+    password: String,
+    #[serde(default)]
+    expires_at: i64,
+    #[serde(default)]
+    vk_hash: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    is_deactivated: bool,
+    // This password's own App routing, overriding the server's: absent → the server's rule; present → its own rule, and
+    // one with everything at its default means NO rule for it, whatever the server's says.
+    #[serde(default)]
+    app_routing: Option<SwgAppRouting>,
+}
+
+// Watch desired.json and reconcile on start, on SIGHUP, and on mtime change (3s poll). desired.json is the
+// panel's INPUT (sole writer); the csqtt.db store is csqtt's OUTPUT (sole writer) → no write race.
+async fn swgpanel_desired_loop(app: Arc<App>, path: std::path::PathBuf) {
+    swgpanel_reconcile_desired(&app, &path).await;
+    let mut last = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
+    let mut ticker = tokio::time::interval(Duration::from_secs(3));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut ticks = 0u32;
+    loop {
+        let hup = async {
+            match sighup.as_mut() {
+                Some(s) => {
+                    s.recv().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            _ = ticker.tick() => {
+                // once a minute: an expiry passes with no change to the file, and its live sessions must end
+                ticks = ticks.wrapping_add(1);
+                if ticks % 20 == 0 {
+                    protocol::cut_expired_password_sessions(&app).await;
+                }
+                let m = std::fs::metadata(&path).and_then(|md| md.modified()).ok();
+                if m != last {
+                    last = m;
+                    swgpanel_reconcile_desired(&app, &path).await;
+                }
+            }
+            _ = hup => {
+                swgpanel_reconcile_desired(&app, &path).await;
+                last = std::fs::metadata(&path).and_then(|md| md.modified()).ok();
+            }
+        }
+    }
+}
+
+// App routing onto the store: the server's rule ("swg") for every password, unless a password carries its own (a rule shared by
+// content, "swg-<hash>"), or its own empty one (no rule). Every "swg*" rule no password uses any more is dropped. Returns
+// whether the store changed.
+fn swgpanel_apply_routing(db: &mut model::Database, desired: &SwgDesiredFile, main_pw: &str) -> bool {
+    let mut changed = false;
+    let server_rule = desired.app_routing.as_ref().and_then(swgpanel_app_rule);
+    let mut wanted: std::collections::BTreeMap<String, model::RoutingRule> = std::collections::BTreeMap::new();
+    for d in desired.passwords.iter().filter(|p| !p.password.is_empty() && p.password != main_pw) {
+        let rule = match &d.app_routing {
+            Some(own) => swgpanel_app_rule(own).map(|mut r| {
+                r.id = swgpanel_rule_id(&r);
+                r
+            }),
+            None => server_rule.clone(),
+        };
+        let id = rule.as_ref().map(|r| r.id.clone()).unwrap_or_default();
+        if let Some(r) = rule {
+            wanted.insert(r.id.clone(), r);
+        }
+        if let Some(entry) = db.passwords.get_mut(&d.password)
+            && entry.routing_rule_id != id
+        {
+            entry.routing_rule_id = id;
+            changed = true;
+        }
+    }
+    let stale: Vec<String> = db
+        .routing_rules
+        .keys()
+        .filter(|k| (k.as_str() == SWG_RULE_ID || k.starts_with("swg-")) && !wanted.contains_key(*k))
+        .cloned()
+        .collect();
+    for k in stale {
+        db.routing_rules.remove(&k);
+        changed = true;
+    }
+    for (id, rule) in wanted {
+        if db.routing_rules.get(&id) != Some(&rule) {
+            db.routing_rules.insert(id, rule);
+            changed = true;
+        }
+    }
+    changed
+}
+
+async fn swgpanel_reconcile_desired(app: &Arc<App>, path: &std::path::Path) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return, // absent/unreadable → never wipe live passwords on a transient read error
+    };
+    let desired: SwgDesiredFile = match serde_json::from_str(&text) {
+        Ok(d) => d,
+        Err(error) => {
+            eprintln!("[DESIRED] parse {}: {error}", path.display());
+            return;
+        }
+    };
+    let want: std::collections::HashMap<&str, &SwgDesiredPw> = desired
+        .passwords
+        .iter()
+        .filter(|p| !p.password.is_empty())
+        .map(|p| (p.password.as_str(), p))
+        .collect();
+    // Passwords whose live sessions must end: removed, or just deactivated — what the stock web panel's
+    // client_delete / client_toggle do. A session of a password that stays usable is never touched.
+    let mut cut: Vec<String> = Vec::new();
+    let mut removed: Vec<String> = Vec::new();
+    let mut changed = false;
+    {
+        let mut db = app.db.write().await;
+        let main_pw = db.main_password.clone();
+        removed.extend(
+            db.passwords
+                .keys()
+                .filter(|k| **k != main_pw && !want.contains_key(k.as_str()))
+                .cloned(),
+        );
+        for k in &removed {
+            db.passwords.remove(k);
+            changed = true;
+        }
+        // add new / update the panel-owned fields (never ip / up_bytes / down_bytes — csqtt owns those). In file
+        // order, so new passwords take addresses in the order the panel lists them.
+        for d in desired.passwords.iter().filter(|p| !p.password.is_empty()) {
+            let pw = &d.password.as_str();
+            if *pw == main_pw {
+                continue;
+            }
+            match db.passwords.get_mut(*pw) {
+                Some(entry) => {
+                    if entry.expires_at != d.expires_at
+                        || entry.vk_hash != d.vk_hash
+                        || entry.vk_hashes != d.vk_hash
+                        || entry.name != d.name
+                        || entry.is_deactivated != d.is_deactivated
+                    {
+                        if d.is_deactivated && !entry.is_deactivated {
+                            cut.push((*pw).to_owned());
+                        }
+                        entry.expires_at = d.expires_at;
+                        entry.vk_hash = d.vk_hash.clone();
+                        entry.vk_hashes = d.vk_hash.clone();
+                        entry.name = d.name.clone();
+                        entry.is_deactivated = d.is_deactivated;
+                        changed = true;
+                    }
+                }
+                None => {
+                    // as the stock web panel's client_create: the address and the subscription id are given here
+                    let ip = model::get_next_ip(&db).unwrap_or_default();
+                    db.passwords.insert(
+                        (*pw).to_owned(),
+                        model::PasswordEntry {
+                            ip,
+                            expires_at: d.expires_at,
+                            vk_hash: d.vk_hash.clone(),
+                            vk_hashes: d.vk_hash.clone(),
+                            name: d.name.clone(),
+                            is_deactivated: d.is_deactivated,
+                            sub_uuid: model::random_uuid_v4(),
+                            ..Default::default()
+                        },
+                    );
+                    changed = true;
+                }
+            }
+        }
+        changed |= swgpanel_apply_routing(&mut db, &desired, &main_pw);
+        if changed {
+            app.db_persistence.submit(db.clone());
+        }
+    }
+    for pw in &removed {
+        app.derived_keys.remove(pw);
+    }
+    for pw in removed.iter().chain(&cut) {
+        protocol::drop_password_sessions(app, pw);
+    }
+    if changed
+        && let Err(error) = protocol::refresh_credentials(app).await
+    {
+        eprintln!("[DESIRED] refresh credentials: {error:#}");
     }
 }
 
@@ -1744,5 +2117,88 @@ mod lock_tests {
             cores: 4,
         };
         assert_eq!(cpu_percentage(previous, current), Some(80));
+    }
+}
+
+#[cfg(test)]
+mod swg_app_routing_tests {
+    use super::*;
+
+    fn r(apps: &str, pk: &[&str], dm: &str, d: &[&str], tpl: bool, im: &str, ips: &[&str]) -> SwgAppRouting {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        SwgAppRouting { apps_mode: apps.into(), packages: v(pk), domains_mode: dm.into(), domains: v(d),
+                        template_domains: tpl, ips_mode: im.into(), ips: v(ips) }
+    }
+
+    #[test]
+    fn nothing_asked_is_no_rule() {
+        assert!(swgpanel_app_rule(&r("all", &["com.x"], "direct", &[], false, "direct", &[])).is_none());
+        assert!(swgpanel_app_rule(&SwgAppRouting::default()).is_none());
+    }
+
+    #[test]
+    fn each_mode_maps_onto_the_rule() {
+        let x = swgpanel_app_rule(&r("except", &["org.telegram.messenger"], "direct", &["ya.ru"], true, "direct", &["10.0.0.0/8"])).unwrap();
+        assert_eq!(x.id, SWG_RULE_ID);
+        assert!(!x.is_whitelist && x.packages == vec!["org.telegram.messenger"]);
+        assert!(!x.domains_is_whitelist && x.direct_domains == vec!["ya.ru"] && x.template_domains);
+        assert!(!x.ip_is_whitelist && x.ips == vec!["10.0.0.0/8"]);
+        let o = swgpanel_app_rule(&r("only", &["com.a"], "tunnel", &["b.com"], true, "tunnel", &["1.1.1.1"])).unwrap();
+        assert!(o.is_whitelist && o.domains_is_whitelist && o.ip_is_whitelist);
+        assert!(!o.template_domains, "the built-in list is a direct list: dropped in tunnel mode");
+        // "all" never carries packages, whatever the list says
+        let a = swgpanel_app_rule(&r("all", &["com.a"], "direct", &["c.com"], false, "direct", &[])).unwrap();
+        assert!(a.packages.is_empty() && !a.is_whitelist);
+        // the built-in list alone is a rule
+        assert!(swgpanel_app_rule(&r("all", &[], "direct", &[], true, "direct", &[])).unwrap().template_domains);
+    }
+
+    fn pw(p: &str, own: Option<SwgAppRouting>) -> SwgDesiredPw {
+        SwgDesiredPw { password: p.into(), expires_at: 0, vk_hash: String::new(), name: String::new(), is_deactivated: false, app_routing: own }
+    }
+
+    fn db_with(pws: &[&str]) -> model::Database {
+        let mut db = model::Database { main_password: "owner".into(), ..Default::default() };
+        for p in pws {
+            db.passwords.insert((*p).into(), model::PasswordEntry::default());
+        }
+        db
+    }
+
+    #[test]
+    fn per_password_overrides_the_server_rule() {
+        let mut db = db_with(&["a", "b", "c", "d"]);
+        let tg = r("except", &["org.telegram.messenger"], "direct", &[], false, "direct", &[]);
+        let desired = SwgDesiredFile {
+            app_routing: Some(r("all", &[], "direct", &["ya.ru"], false, "direct", &[])),
+            passwords: vec![pw("a", None), pw("b", Some(tg.clone())), pw("c", Some(tg)), pw("d", Some(SwgAppRouting::default()))],
+        };
+        assert!(swgpanel_apply_routing(&mut db, &desired, "owner"));
+        let id = |p: &str| db.passwords[p].routing_rule_id.clone();
+        assert_eq!(id("a"), SWG_RULE_ID, "no override: the server's rule");
+        assert!(id("b").starts_with("swg-") && id("b") == id("c"), "the same override shares one rule");
+        assert_eq!(id("d"), "", "an empty override: no rule at all");
+        assert_eq!(db.routing_rules.len(), 2);
+        assert_eq!(db.routing_rules[&id("b")].packages, vec!["org.telegram.messenger"]);
+        // the same desired again changes nothing (stable ids, no churn)
+        assert!(!swgpanel_apply_routing(&mut db, &desired, "owner"));
+        // the server rule and the overrides gone: every swg rule dropped, every password cleared
+        let bare = SwgDesiredFile { app_routing: None, passwords: vec![pw("a", None), pw("b", None), pw("c", None), pw("d", None)] };
+        assert!(swgpanel_apply_routing(&mut db, &bare, "owner"));
+        assert!(db.routing_rules.is_empty());
+        assert!(db.passwords.values().all(|e| e.routing_rule_id.is_empty()));
+    }
+
+    #[test]
+    fn a_rule_nobody_uses_any_more_is_dropped_and_others_are_kept() {
+        let mut db = db_with(&["a"]);
+        db.routing_rules.insert("user-made".into(), model::RoutingRule { id: "user-made".into(), ..Default::default() });
+        let one = SwgDesiredFile { app_routing: None, passwords: vec![pw("a", Some(r("only", &["com.x"], "direct", &[], false, "direct", &[])))] };
+        swgpanel_apply_routing(&mut db, &one, "owner");
+        let first = db.passwords["a"].routing_rule_id.clone();
+        let two = SwgDesiredFile { app_routing: None, passwords: vec![pw("a", Some(r("only", &["com.y"], "direct", &[], false, "direct", &[])))] };
+        swgpanel_apply_routing(&mut db, &two, "owner");
+        assert!(!db.routing_rules.contains_key(&first), "the old override's rule is gone");
+        assert!(db.routing_rules.contains_key("user-made"), "a rule the panel did not make is never touched");
     }
 }

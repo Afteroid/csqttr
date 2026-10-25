@@ -70,10 +70,12 @@ class DeployScriptPreflightTest {
     fun `activation uses direct runtime paths and has no staged candidate`() {
         val deploy = script()
         assertTrue(deploy.contains("readonly UPLOAD_BINARY=\"/tmp/.csqtt-upload-server\""))
-        assertTrue(deploy.contains("install -m 0755 \"\$UPLOAD_BINARY\" /usr/local/bin/csqtt"))
+        assertTrue(deploy.contains("install -m 0755 \"\$UPLOAD_BINARY\" \"\$CSQTT_BIN\""))
         assertTrue(deploy.contains("install -m 0600 \"\$UPLOAD_ENV_FILE\" \"\$CSQTT_ENV_FILE\""))
-        assertTrue(deploy.contains("rm -f /usr/local/bin/csqtt"))
-        assertTrue(deploy.contains("rm -rf /usr/local/lib/csqtt"))
+        assertTrue(deploy.contains("rm -f \"\$CSQTT_BIN\""))
+        assertTrue(deploy.contains("rm -rf \"\$CSQTT_LIB_DIR\""))
+        // «Вместо 2.1.9» keeps the stock layout
+        assertTrue(deploy.contains("_bin=/usr/local/bin/csqtt; _lib=/usr/local/lib/csqtt; _conf=/etc/csqtt"))
         assertTrue(deploy.contains("clear_runtime_config_preserving_database()"))
         assertFalse(deploy.contains("csqtt.next.XXXXXX"))
         assertFalse(deploy.contains("csqtt-stage"))
@@ -88,7 +90,7 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("ensure_csqtt_directory()"))
         assertTrue(deploy.contains("rm -rf -- \"\$path\" || die \"Не удалось очистить путь CSQTT: \$path\""))
         assertTrue(deploy.contains("ensure_csqtt_directory \"\$CSQTT_CONFIG_DIR\" 700"))
-        assertTrue(deploy.contains("ensure_csqtt_directory /usr/local/lib/csqtt 755"))
+        assertTrue(deploy.contains("ensure_csqtt_directory \"\$CSQTT_LIB_DIR\" 755"))
         assertTrue(deploy.contains("setup_csqtt_environment() {\n    ensure_csqtt_directory \"\$CSQTT_CONFIG_DIR\" 700"))
         assertTrue(deploy.contains("install -m 0600 \"\$UPLOAD_ENV_FILE\" \"\$CSQTT_ENV_FILE\""))
     }
@@ -114,8 +116,10 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("--security-opt seccomp=unconfined"))
         assertTrue(deploy.contains("probe_docker_runtime"))
         assertTrue(deploy.split("--cap-drop ALL").size >= 3)
-        assertTrue(deploy.contains("COPY network-up.sh /usr/local/lib/csqtt/network-up.sh"))
-        assertTrue(deploy.contains("exec /usr/local/bin/csqtt \\\"\$@\\\""))
+        assertTrue(deploy.contains("COPY network-up.sh @IMG_LIB@/network-up.sh"))
+        assertTrue(deploy.contains("exec @IMG_BIN@ \\\"\$@\\\""))
+        assertTrue(deploy.contains("s#@IMG_BIN@#\${CSQTT_IMAGE_BIN}#g; s#@IMG_LIB@#\${CSQTT_IMAGE_LIB_DIR}#g"))
+        assertTrue(deploy.contains("_img_bin=/usr/local/bin/csqtt; _img_lib=/usr/local/lib/csqtt; _img_conf=/etc/csqtt"))
         assertTrue(deploy.contains("write_network_helper \"\$context_dir/network-up.sh\""))
     }
 
@@ -166,16 +170,16 @@ class DeployScriptPreflightTest {
         val deploy = script()
         assertTrue(deploy.contains("remove_csqtt_tun_interface()"))
         assertTrue(deploy.contains("timeout 2 ip link del \"\$CSQTT_IFACE\""))
-        assertTrue(deploy.contains("write_tun_recovery_helper /usr/local/lib/csqtt/tun-recover.sh"))
-        assertTrue(deploy.contains("ExecStartPre=/usr/local/lib/csqtt/tun-recover.sh"))
+        assertTrue(deploy.contains("write_tun_recovery_helper \"\$CSQTT_LIB_DIR/tun-recover.sh\""))
+        assertTrue(deploy.contains("ExecStartPre=\${CSQTT_LIB_DIR}/tun-recover.sh"))
         assertTrue(deploy.contains("release_owned_peer_port()"))
         assertTrue(deploy.contains("csqtt_process_is_owned()"))
         assertTrue(deploy.contains("""UDP/\${'$'}PEER_PORT runtime PID \${'$'}pid; terminating"""))
         assertTrue(deploy.contains("readonly START_STABILITY_SECONDS=\"\${CSQTT_START_STABILITY_SECONDS:-4}\""))
         assertTrue(deploy.contains("StartLimitIntervalSec=60"))
         assertTrue(deploy.contains("RestartSec=3"))
-        assertTrue(deploy.contains("COPY tun-recover.sh /usr/local/lib/csqtt/tun-recover.sh"))
-        assertTrue(deploy.contains("/usr/local/lib/csqtt/tun-recover.sh; exec /usr/local/bin/csqtt"))
+        assertTrue(deploy.contains("COPY tun-recover.sh @IMG_LIB@/tun-recover.sh"))
+        assertTrue(deploy.contains("@IMG_LIB@/tun-recover.sh; exec @IMG_BIN@"))
     }
 
     @Test
@@ -229,7 +233,7 @@ class DeployScriptPreflightTest {
 
         assertTrue(forceStop.contains("kill -KILL \"\$pid\""))
         assertTrue(cleanup.indexOf("force_stop_csqtt_processes") <
-            cleanup.indexOf("rm -f /usr/local/bin/csqtt"))
+            cleanup.indexOf("rm -f \"\$CSQTT_BIN\""))
         assertTrue(cleanup.contains("systemctl daemon-reload || die \"systemctl daemon-reload завершился ошибкой после удаления старого runtime\""))
     }
 
@@ -260,11 +264,13 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("--ip-address \"\$public_ip\""))
         assertTrue(deploy.contains("--force-renewal"))
         assertTrue(deploy.contains("openssl x509 -noout -checkend \"\$LE_RENEW_BEFORE_SECONDS\""))
-        assertTrue(deploy.contains("OnUnitInactiveSec=24h") || deploy.contains("OnUnitInactiveSec=1h"))
+        assertTrue(deploy.contains("OnUnitInactiveSec=\${LE_RENEW_EVERY}"))
+        assertTrue(deploy.contains("_le_before=259200; _le_every=24h"))
         assertTrue(deploy.contains("fw_add_input_tcp \"\$LE_HTTP_PORT\""))
         assertTrue(deploy.contains("web_cert.pem|web_key.pem|letsencrypt-ip.env"))
-        assertTrue(deploy.contains("systemctl kill --kill-who=main --signal USR1 csqtt"))
-        assertTrue(deploy.contains("docker kill --signal USR1 csqtt"))
+        assertTrue(deploy.contains("systemctl kill --kill-who=main --signal USR1 \"\$UNIT_NAME\""))
+        assertTrue(deploy.contains("docker kill --signal USR1 \"\$UNIT_NAME\""))
+        assertTrue(deploy.contains("Environment=CSQTT_UNIT_NAME=\${CSQTT_UNIT}"))
         assertTrue(deploy.contains("issuer=\"\${issuer#issuer=}\""))
         assertTrue(deploy.contains("subject=\"\${subject#subject=}\""))
         assertTrue(deploy.contains("! python3 -c 'import ensurepip'"))
@@ -289,5 +295,98 @@ class DeployScriptPreflightTest {
         assertTrue(deploy.contains("rm -f -- \"\$CSQTT_LE_STATE_FILE\""))
         assertTrue(deploy.contains("disable_letsencrypt_renewal_timer"))
         assertTrue(deploy.contains("CSQTT не изменяет его и отключает собственное продление"))
+    }
+
+    @Test
+    fun `both modes refuse another server's interface or port before anything is stopped`() {
+        val deploy = script()
+        fun body(name: String) = deploy.substringAfter("$name() {").substringBefore("\n}\n")
+        for (preflight in listOf("main_preflight", "side_preflight")) {
+            val p = body(preflight)
+            assertTrue(preflight, p.contains("refuse_anothers_server"))
+            assertTrue(preflight, p.contains("refuse_foreign_port_holder u \"\$PEER_PORT\""))
+            assertTrue(preflight, p.contains("refuse_foreign_port_holder t \"\$WEB_PORT\""))
+        }
+        val install = deploy.substringAfter("install|--install|-i)")
+        assertTrue(install.indexOf("main_preflight") in 0 until install.indexOf("csqtt_cleanup"))
+        // a live interface another process holds (its fdinfo names it: "iff:") is never deleted as a leftover
+        val tun = body("tun_holder_pids")
+        assertTrue(tun.contains("-lname /dev/net/tun") && tun.contains("iff:"))
+        val remove = body("remove_csqtt_tun_interface")
+        assertTrue(remove.indexOf("foreign_tun_holders") in 0 until remove.indexOf("ip link del"))
+        // swg-panel's servers are found by their units, a stopped one too (the panel starts it again later)
+        val panel = body("panel_units_claiming")
+        assertTrue(panel.contains("'swg-csqtt-*.service'") && panel.contains("panel_unit_settings"))
+        val settings = body("panel_unit_settings")
+        assertTrue(settings.contains("SWG_IFACE=") && settings.contains("SWG_LISTEN="))
+    }
+
+    @Test
+    fun `the server check reads only and runs before the installer prints or logs anything`() {
+        val deploy = script()
+        fun body(name: String) = deploy.substringAfter("$name() {").substringBefore("\n}\n")
+        // the last main(): deploy.sh writes a helper script with its own main() further up
+        val main = deploy.substringAfterLast("\nmain() {").substringBefore("\n}\n")
+        val check = main.indexOf("= inventory ]")
+        assertTrue(check >= 0)
+        assertTrue(check < main.indexOf("echo \"╔") && check < main.indexOf("\$LOG_FILE"))
+        val readers = listOf("do_inventory", "inv_place", "main_place_strangers", "server_ports_in", "pid_in_cgroups", "panel_unit_settings")
+        for (name in readers) {
+            val b = body(name)
+            for (write in listOf("mkdir", "rm ", ">>", "tee ", "systemctl stop", "systemctl disable", "docker stop", "docker rm", "kill ", "ip link del", "iptables")) {
+                assertFalse("$name: $write", b.contains(write))
+            }
+        }
+        assertTrue(body("do_inventory").trimEnd().endsWith("inv_line end"))
+    }
+
+    @Test
+    fun `the standard place refuses a server it did not install instead of wiping it`() {
+        val deploy = script()
+        fun body(name: String) = deploy.substringAfter("$name() {").substringBefore("\n}\n")
+        // main mode's cleanup stops, kills and deletes every csqtt unit, container and process it matches: anything of
+        // that kind that is not the standard place's own is refused before it runs
+        val preflight = body("main_preflight")
+        assertTrue(preflight.contains("main_place_strangers"))
+        // removing the standard place runs the same cleanup: refused the same way, before anything stops
+        val uninstall = body("do_uninstall")
+        assertTrue(uninstall.indexOf("main_place_strangers") in 0 until uninstall.indexOf("remove_all_csqtt_docker_containers"))
+        // a unit between crash restarts is a running server, not a stopped leftover
+        assertTrue(body("main_place_strangers").contains("unit_live"))
+        val install = deploy.substringAfter("install|--install|-i)")
+        assertTrue(install.indexOf("main_preflight") in 0 until install.indexOf("csqtt_cleanup"))
+        // 2.1.9's cascade helper (/usr/local/bin/csqtt-cascade) matches the stock pattern but is the standard place's own
+        val units = Regex("STANDARD_PLACE_UNITS=\"([^\"]+)\"").find(deploy)!!.groupValues[1].split(" ")
+        for (unit in listOf("csqtt.service", "csqtt-cascade.service", "csqtt-letsencrypt.service", "csqtt-docker-prereq.service")) {
+            assertTrue(unit, unit in units)
+        }
+        val strangers = body("main_place_strangers")
+        assertTrue(strangers.contains("list_csqtt_systemd_units") && strangers.contains("docker_container_runs_csqtt") &&
+            strangers.contains("all_csqtt_process_pids"))
+        // what the user reads no longer names a version for a mode
+        assertFalse(deploy.contains("«Рядом с 2.1.9»") || deploy.contains("«Вместо 2.1.9»"))
+    }
+
+    @Test
+    fun `side server names stay out of the stock installer's cleanup reach`() {
+        val deploy = script()
+        val side = deploy.substringAfter("    side)\n").substringBefore(";;")
+        fun value(key: String) = Regex("""_$key=([^;\s]+)""").find(side)!!.groupValues[1]
+        // a stock 2.1.9 deploy.sh stops and deletes any unit whose text matches /usr/local/bin/csqtt or /usr/local/lib/csqtt/
+        for (key in listOf("bin", "lib", "img_bin", "img_lib", "le_helper", "le_venv")) {
+            val path = value(key)
+            assertFalse(path, path.contains("/usr/local/bin/csqtt") || "$path/".contains("/usr/local/lib/csqtt/"))
+        }
+        // …containers whose mounts contain :/etc/csqtt, and rules whose comment contains a stock marker
+        assertFalse(value("img_conf").startsWith("/etc/csqtt"))
+        val tag = value("tag")
+        for (stock in listOf("CSQTT_MANAGED", "CSQTT_MIRRORED", "CSQTT_TPROXY", "CSQTT_LOCAL_SOCKS", "CSQTT_SOCKS", "CSQTT_CASCADE_NO_QUIC")) {
+            assertFalse(stock, tag.contains(stock))
+        }
+        assertTrue(value("bin").contains("csqtt")) // swg-panel's adoption scan finds a csqtt server by its path
+        // the side server is a separate instance on the server's command line, in both run modes
+        assertTrue(deploy.contains("CSQTT_INSTANCE_ARGS=(--instance \"\$CSQTT_NAME\" --iface \"\$CSQTT_IFACE\" --tun-addr \"\${CSQTT_GATEWAY}/24\")"))
+        assertTrue(deploy.contains("--config-dir \"\$CSQTT_IMAGE_CONFIG_DIR\" \"\${CSQTT_INSTANCE_ARGS[@]}\""))
+        assertTrue(deploy.contains("ExecStart=\${CSQTT_BIN} --listen"))
     }
 }

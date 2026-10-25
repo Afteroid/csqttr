@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Refresh
@@ -294,40 +295,42 @@ private fun ManualPortFields(
     state: DeployUiState,
     onAction: (DeployAction) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(CsqttSpacing.Sm),
-    ) {
-        DeployTextField(
-            value = state.sshPort,
-            onValueChange = { onAction(DeployAction.SshPortChanged(it)) },
-            label = "SSH-порт",
-            placeholder = "22",
-            enabled = !state.isDeploying,
-            isError = state.showValidation && !isValidPort(state.sshPort),
-            keyboardType = KeyboardType.Number,
-            modifier = Modifier.weight(1f),
-        )
-        DeployTextField(
-            value = state.peerPort,
-            onValueChange = { onAction(DeployAction.PeerPortChanged(it)) },
-            label = "Порт туннеля",
-            placeholder = "46000",
-            enabled = !state.isDeploying,
-            isError = state.showValidation && !isValidPort(state.peerPort),
-            keyboardType = KeyboardType.Number,
-            modifier = Modifier.weight(1f),
-        )
-        DeployTextField(
-            value = state.webPort,
-            onValueChange = { onAction(DeployAction.WebPortChanged(it)) },
-            label = "Порт WEB-панели",
-            placeholder = "46002",
-            enabled = !state.isDeploying,
-            isError = state.showValidation && !isValidPort(state.webPort),
-            keyboardType = KeyboardType.Number,
-            modifier = Modifier.weight(1f),
-        )
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(CsqttSpacing.Sm),
+        ) {
+            DeployTextField(
+                value = state.sshPort,
+                onValueChange = { onAction(DeployAction.SshPortChanged(it)) },
+                label = "SSH-порт",
+                placeholder = "22",
+                enabled = !state.isDeploying,
+                isError = state.showValidation && !isValidPort(state.sshPort),
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f),
+            )
+            DeployTextField(
+                value = state.peerPort,
+                onValueChange = { onAction(DeployAction.PeerPortChanged(it)) },
+                label = "Порт туннеля",
+                placeholder = CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT.toString(),
+                enabled = !state.isDeploying,
+                isError = state.showValidation && !isValidPort(state.peerPort),
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f),
+            )
+            DeployTextField(
+                value = state.webPort,
+                onValueChange = { onAction(DeployAction.WebPortChanged(it)) },
+                label = "Порт WEB-панели",
+                placeholder = CsqttConstants.Network.DEFAULT_SERVER_WEB_PORT.toString(),
+                enabled = !state.isDeploying,
+                isError = state.showValidation && !isValidPort(state.webPort),
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

@@ -954,6 +954,24 @@ class SettingsStore(context: Context) {
         }
     }
 
+    // After a successful deploy the profile points at the server it installed or updated: its ports are written whatever
+    // they are (a profile that last deployed a second server on 46100 and now updates the one on 46000 must dial 46000),
+    // ports other than 46000/46002 turn "Ручные порты" on — the connection dials serverPeerPort only then — and an empty
+    // server address becomes the host. Nothing changes before a deploy succeeds.
+    suspend fun saveDeployedServer(profile: Int, host: String, peerPort: Int, webPort: Int) {
+        dataStore.edit { prefs ->
+            // the profile that started the deploy, even if another is active by the time it finished
+            if ((prefs[getProfileKey(PEER, profile)] ?: "").isBlank() && host.isNotBlank()) {
+                prefs[getProfileKey(PEER, profile)] = host
+            }
+            prefs[getProfileKey(SERVER_PEER_PORT, profile)] = peerPort
+            prefs[getProfileKey(SERVER_WEB_PORT, profile)] = webPort
+            if (peerPort != CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT || webPort != CsqttConstants.Network.DEFAULT_SERVER_WEB_PORT) {
+                prefs[getProfileKey(MANUAL_PORTS_ENABLED, profile)] = true
+            }
+        }
+    }
+
     suspend fun saveDockerInstall(enabled: Boolean) {
         dataStore.edit { prefs ->
             val profile = prefs[ACTIVE_PROFILE] ?: 0
@@ -1041,9 +1059,11 @@ class SettingsStore(context: Context) {
         }
     }
 
-    suspend fun saveConnectionPassword(password: String) {
+    // [forProfile]: a deploy writes into the profile that started it, as saveDeployedServer does — the active one may
+    // have changed during the minutes it ran
+    suspend fun saveConnectionPassword(password: String, forProfile: Int? = null) {
         dataStore.edit { prefs ->
-            val profile = prefs[ACTIVE_PROFILE] ?: 0
+            val profile = forProfile ?: prefs[ACTIVE_PROFILE] ?: 0
             val localKey = getProfileKey(CONNECTION_PASSWORD_LOCAL, profile)
             val legacyKey = getProfileKey(CONNECTION_PASSWORD, profile)
             val encryptedKey = getProfileKey(CONNECTION_PASSWORD_ENCRYPTED, profile)
@@ -1558,7 +1578,7 @@ class SettingsStore(context: Context) {
             deploy.put("vk_auth_mode", prefs[getProfileKey(VK_AUTH_MODE, p)] ?: CsqttConstants.VkAuth.MODE_CALLS)
             deploy.put("vk_hash_mode", prefs[getProfileKey(VK_HASH_MODE, p)] ?: CsqttConstants.VkAutoHash.MODE_MANUAL)
             // the VK access token is a VK account credential: it stays on this device (an export goes to the clipboard
-            // and Downloads). Older exports carried it blank in practice; the import below leaves a stored one alone.
+            // and Downloads). Exports before 2.5.2 carried it blank in practice; the import below leaves a stored one alone.
             deploy.put("workers_per_hash", prefs[getProfileKey(WORKERS_PER_HASH, p)] ?: 18)
             deploy.put("extra_workers", prefs[getProfileKey(EXTRA_WORKERS, p)] ?: false)
             deploy.put("csqtt_link", prefs[getProfileKey(CSQTT_LINK, p)] ?: "")
@@ -1650,7 +1670,7 @@ class SettingsStore(context: Context) {
                     if (deploy.has("secondary_vk_hash")) mutable[getProfileKey(SECONDARY_VK_HASH, p)] = deploy.getString("secondary_vk_hash")
                     if (deploy.has("vk_auth_mode")) mutable[getProfileKey(VK_AUTH_MODE, p)] = deploy.getString("vk_auth_mode")
                     if (deploy.has("vk_hash_mode")) mutable[getProfileKey(VK_HASH_MODE, p)] = deploy.getString("vk_hash_mode")
-                    // blank (every older export) leaves the stored token alone; exports no longer carry it
+                    // blank (every export before 2.5.2) leaves the stored token alone; exports no longer carry it
                     deploy.optString("vk_access_token").takeIf { it.isNotBlank() }?.let {
                         mutable.putSecret(VK_ACCESS_TOKEN_ENCRYPTED, VK_ACCESS_TOKEN, it, p)
                     }

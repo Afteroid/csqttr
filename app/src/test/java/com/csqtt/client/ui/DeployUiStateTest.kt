@@ -71,6 +71,13 @@ class DeployUiStateTest {
     }
 
     @Test
+    fun `the panel link is the profile's server`() {
+        // a deploy stores the server's ports on success; the link follows them
+        assertTrue(completeState.panelDisplayUrl.startsWith("https://server.example:46002/"))
+        assertTrue(completeState.copy(manualPorts = true, webPort = "46102").panelDisplayUrl.startsWith("https://server.example:46102/"))
+    }
+
+    @Test
     fun `manual ports preserve valid custom values`() {
         val ports = resolveServerPorts(
             manualPorts = true,

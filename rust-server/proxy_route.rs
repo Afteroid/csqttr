@@ -17,9 +17,7 @@ const MARK_COMMENT: &str = "CSQTT_LOCAL_SOCKS_MARK";
 const POLICY_MARK: &str = "0x422";
 const LEGACY_NAT_COMMENT: &str = "CSQTT_SOCKS";
 const LEGACY_QUIC_COMMENT: &str = "CSQTT_CASCADE_NO_QUIC";
-const TPROXY_TABLE: &str = "30001";
-const TPROXY_PRIORITY: &str = "30001";
-const TPROXY_RULE_MARK: &str = "0x7531/0x7531";
+// Table, priority and fwmark are the INSTANCE's (crate::swgpanel::tproxy_table/tproxy_mark): stock 30001 / 0x7531.
 const TPROXY_START_ATTEMPTS: u64 = 8;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const SOCKS_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
@@ -69,7 +67,11 @@ impl ProxyRoute {
             remove_tproxy_status_file(&status_path);
             let _guard = POLICY_LOCK.lock().await;
             cleanup_shared_policy().await;
-            cleanup_legacy_proxy_policy().await;
+            // stock's legacy rule/table (fwmark 0x422, table 1066) are the default instance's to clear, as at its other
+            // call sites — a second server's failed activation must not touch them
+            if crate::swgpanel::is_default_instance() {
+                cleanup_legacy_proxy_policy().await;
+            }
             return Err(error);
         }
 
@@ -142,7 +144,11 @@ impl ProxyRoute {
         let _guard = POLICY_LOCK.lock().await;
         ACTIVE_RUNTIME.store(0, Ordering::Release);
         cleanup_shared_policy().await;
-        cleanup_legacy_proxy_policy().await;
+        // 1066 / 0x422 / CSQTT_LOCAL_SOCKS*: stock's own legacy, never installed by 2.1.9 or 2.5 — a side instance
+        // leaves it to stock (its ip rule / table deletes are not subnet-scoped)
+        if crate::swgpanel::is_default_instance() {
+            cleanup_legacy_proxy_policy().await;
+        }
         verify_proxy_policy_clean().await
     }
 }
@@ -187,6 +193,13 @@ fn spawn_tproxy_child(config: &LocalProxyProfile, port: u16, status_path: &Path)
         .arg(port.to_string())
         .arg("--tproxy-status")
         .arg(status_path)
+        // the child's own swgpanel config (it re-parses the CLI): same instance, iface and subnet as its parent
+        .arg("--instance")
+        .arg(crate::swgpanel::instance())
+        .arg("--iface")
+        .arg(crate::swgpanel::iface())
+        .arg("--tun-addr")
+        .arg(format!("{}/24", crate::swgpanel::gw_addr()))
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -233,7 +246,8 @@ async fn wait_for_tproxy_child(child: &mut Child, status_path: &Path) -> Result<
 }
 
 fn tproxy_status_path(runtime_id: u64) -> PathBuf {
-    std::env::temp_dir().join(format!("csqtt-tproxy-{runtime_id}.sock"))
+    // runtime ids restart at 1 in every process: two servers on one host would share csqtt-tproxy-1.sock
+    std::env::temp_dir().join(format!("{}-tproxy-{runtime_id}.sock", crate::swgpanel::instance()))
 }
 
 fn remove_tproxy_status_file(path: &Path) {
@@ -498,11 +512,15 @@ pub(crate) fn socks_udp_response(packet: &[u8]) -> Result<(SocketAddr, &[u8])> {
 
 async fn activate_tproxy(runtime_id: u64, port: u16) -> Result<()> {
     let _guard = POLICY_LOCK.lock().await;
-    cleanup_legacy_proxy_policy().await;
+    if crate::swgpanel::is_default_instance() {
+        cleanup_legacy_proxy_policy().await; // stock's legacy 1066/0x422 — not a side instance's to touch (see startup)
+    }
     let _ = command_output("sysctl", &["-w", "net.ipv4.ip_forward=1"]).await;
     let _ = command_output("sysctl", &["-w", "net.ipv4.conf.all.rp_filter=2"]).await;
     let _ = command_output("sysctl", &["-w", "net.ipv4.conf.default.rp_filter=2"]).await;
-    let _ = command_output("sysctl", &["-w", "net.ipv4.conf.csqtt1.rp_filter=2"]).await;
+    // swg-panel: the instance's own TUN (stock: csqtt1).
+    let iface_rp_filter = format!("net.ipv4.conf.{}.rp_filter=2", crate::swgpanel::iface());
+    let _ = command_output("sysctl", &["-w", &iface_rp_filter]).await;
     add_tproxy_shared_rules().await?;
     add_tproxy_rules(port).await?;
     let _ = command_output("ip", &["route", "flush", "cache"]).await;
@@ -517,11 +535,11 @@ async fn add_tproxy_shared_rules() -> Result<()> {
             "rule",
             "del",
             "fwmark",
-            TPROXY_RULE_MARK,
+            crate::swgpanel::tproxy_mark(),
             "priority",
-            TPROXY_PRIORITY,
+            crate::swgpanel::tproxy_table(),
             "table",
-            TPROXY_TABLE,
+            crate::swgpanel::tproxy_table(),
         ],
     )
     .await
@@ -532,11 +550,11 @@ async fn add_tproxy_shared_rules() -> Result<()> {
             "rule",
             "add",
             "fwmark",
-            TPROXY_RULE_MARK,
+            crate::swgpanel::tproxy_mark(),
             "priority",
-            TPROXY_PRIORITY,
+            crate::swgpanel::tproxy_table(),
             "table",
-            TPROXY_TABLE,
+            crate::swgpanel::tproxy_table(),
         ],
     )
     .await?;
@@ -550,7 +568,7 @@ async fn add_tproxy_shared_rules() -> Result<()> {
             "dev",
             "lo",
             "table",
-            TPROXY_TABLE,
+            crate::swgpanel::tproxy_table(),
         ],
     )
     .await?;
@@ -558,14 +576,14 @@ async fn add_tproxy_shared_rules() -> Result<()> {
 }
 
 fn tproxy_comment(port: u16) -> String {
-    format!("CSQTT_TPROXY:{port}")
+    format!("{}:{port}", crate::swgpanel::tproxy_tag())
 }
 
 async fn tproxy_interception_present(port: u16) -> bool {
     let port_arg = port.to_string();
     let comment = tproxy_comment(port);
-    let iface = crate::tun_device::TUN_IFACE;
-    let subnet = crate::tun_device::TUN_SUBNET;
+    let iface = crate::swgpanel::iface();
+    let subnet = crate::swgpanel::subnet_cidr();
     for protocol in ["tcp", "udp"] {
         if !command_success(
             "iptables",
@@ -587,7 +605,7 @@ async fn tproxy_interception_present(port: u16) -> bool {
                 "-j",
                 "TPROXY",
                 "--tproxy-mark",
-                TPROXY_RULE_MARK,
+                crate::swgpanel::tproxy_mark(),
                 "--on-port",
                 &port_arg,
             ],
@@ -599,13 +617,16 @@ async fn tproxy_interception_present(port: u16) -> bool {
     }
     match command_output("ip", &["rule", "show"]).await {
         Ok(rules) => {
-            let mark = TPROXY_RULE_MARK
+            let mark = crate::swgpanel::tproxy_mark()
                 .split('/')
                 .next()
-                .unwrap_or(TPROXY_RULE_MARK);
+                .unwrap_or_default();
             rules
                 .lines()
-                .any(|line| line.contains(&format!("fwmark {mark}")) && line.contains(TPROXY_TABLE))
+                .any(|line| {
+                    line.contains(&format!("fwmark {mark}"))
+                        && line.contains(crate::swgpanel::tproxy_table())
+                })
         }
         Err(_) => true,
     }
@@ -661,9 +682,9 @@ async fn add_tproxy_rules(port: u16) -> Result<()> {
                 "PREROUTING",
                 "1",
                 "-i",
-                crate::tun_device::TUN_IFACE,
+                crate::swgpanel::iface(),
                 "-s",
-                crate::tun_device::TUN_SUBNET,
+                crate::swgpanel::subnet_cidr(),
                 "-p",
                 protocol,
                 "-m",
@@ -673,7 +694,7 @@ async fn add_tproxy_rules(port: u16) -> Result<()> {
                 "-j",
                 "TPROXY",
                 "--tproxy-mark",
-                TPROXY_RULE_MARK,
+                crate::swgpanel::tproxy_mark(),
                 "--on-port",
                 &port_arg,
             ],
@@ -689,9 +710,9 @@ async fn add_tproxy_rules(port: u16) -> Result<()> {
             "INPUT",
             "1",
             "-i",
-            crate::tun_device::TUN_IFACE,
+            crate::swgpanel::iface(),
             "-s",
-            crate::tun_device::TUN_SUBNET,
+            crate::swgpanel::subnet_cidr(),
             "-m",
             "comment",
             "--comment",
@@ -713,7 +734,8 @@ async fn cleanup_stale_tproxy_rules() -> Result<()> {
         let mut cleared = false;
         for _ in 0..8 {
             let rules = command_output("iptables", &["-t", table, "-S", chain]).await?;
-            let specs = marked_rule_specs(&rules, chain, &["CSQTT_TPROXY"]);
+            // this instance's tag only: stock and a side instance both clean up at every start
+            let specs = marked_rule_specs(&rules, chain, &[crate::swgpanel::tproxy_tag()]);
             if specs.is_empty() {
                 cleared = true;
                 break;
@@ -784,7 +806,7 @@ async fn remove_from_subnet_rule() {
             "rule",
             "del",
             "from",
-            crate::tun_device::TUN_SUBNET,
+            crate::swgpanel::subnet_cidr(),
             "priority",
             LEGACY_POLICY_PRIORITY,
             "table",
@@ -804,7 +826,7 @@ async fn drop_new_flow_mark_rules() {
             "-D",
             "PREROUTING",
             "-s",
-            crate::tun_device::TUN_SUBNET,
+            crate::swgpanel::subnet_cidr(),
             "-m",
             "conntrack",
             "--ctstate",
@@ -833,7 +855,7 @@ async fn cleanup_mark_rules() {
             "-D",
             "PREROUTING",
             "-s",
-            crate::tun_device::TUN_SUBNET,
+            crate::swgpanel::subnet_cidr(),
             "-m",
             "comment",
             "--comment",
@@ -872,7 +894,7 @@ async fn cleanup_nat_exemption(tun_name: &str) {
                 "-D",
                 "POSTROUTING",
                 "-s",
-                crate::tun_device::TUN_SUBNET,
+                crate::swgpanel::subnet_cidr(),
                 "-o",
                 tun_name,
                 "-m",
@@ -913,7 +935,7 @@ async fn cleanup_legacy_quic_rule() {
             "-D",
             "FORWARD",
             "-s",
-            crate::tun_device::TUN_SUBNET,
+            crate::swgpanel::subnet_cidr(),
             "-p",
             "udp",
             "--dport",
@@ -951,11 +973,11 @@ async fn cleanup_shared_policy() {
                 "rule",
                 "del",
                 "fwmark",
-                TPROXY_RULE_MARK,
+                crate::swgpanel::tproxy_mark(),
                 "priority",
-                TPROXY_PRIORITY,
+                crate::swgpanel::tproxy_table(),
                 "table",
-                TPROXY_TABLE,
+                crate::swgpanel::tproxy_table(),
             ],
         )
         .await
@@ -965,7 +987,7 @@ async fn cleanup_shared_policy() {
     if let Err(error) = stale_result {
         eprintln!("[LOCAL-PROXY] stale TPROXY rule cleanup failed: {error:#}");
     }
-    let _ = command_output("ip", &["route", "flush", "table", TPROXY_TABLE]).await;
+    let _ = command_output("ip", &["route", "flush", "table", crate::swgpanel::tproxy_table()]).await;
     let _ = command_output("ip", &["route", "flush", "cache"]).await;
 }
 
@@ -983,23 +1005,25 @@ async fn verify_proxy_policy_clean() -> Result<()> {
             rules.push_str(&chunk);
         }
     }
-    for marker in [
-        "CSQTT_TPROXY",
-        NAT_COMMENT,
-        MARK_COMMENT,
-        LEGACY_NAT_COMMENT,
-        LEGACY_QUIC_COMMENT,
-    ] {
+    let legacy: &[&str] = if crate::swgpanel::is_default_instance() {
+        &[NAT_COMMENT, MARK_COMMENT, LEGACY_NAT_COMMENT, LEGACY_QUIC_COMMENT]
+    } else {
+        &[]
+    };
+    for marker in std::iter::once(crate::swgpanel::tproxy_tag()).chain(legacy.iter().copied()) {
         if rules.contains(marker) {
             bail!("stale netfilter rule remains: {marker}");
         }
     }
     let rules = command_output("ip", &["-4", "rule", "show"]).await?;
     for line in rules.lines() {
-        let owned_tproxy = line.trim_start().starts_with("30001:")
-            && line.contains("fwmark 0x7531")
-            && line.contains("lookup 30001");
-        let owned_legacy = line.trim_start().starts_with("1066:")
+        let table = crate::swgpanel::tproxy_table();
+        let mark = crate::swgpanel::tproxy_mark().split('/').next().unwrap_or_default();
+        let owned_tproxy = line.trim_start().starts_with(&format!("{table}:"))
+            && line.contains(&format!("fwmark {mark}"))
+            && line.contains(&format!("lookup {table}"));
+        let owned_legacy = crate::swgpanel::is_default_instance()
+            && line.trim_start().starts_with("1066:")
             && (line.contains("lookup 1066") || line.contains("fwmark 0x422"));
         if owned_tproxy || owned_legacy {
             bail!("stale policy rule remains: {}", line.trim());
