@@ -3725,6 +3725,7 @@ async fn shutdown_fifty_stream_rig(rig: FiftyStreamRig) -> f64 {
 struct FiftyStreamReport {
     sent_packets: u64,
     delivered_packets: u64,
+    delivered_bytes: u64,
     dropped_packets: u64,
     max_queue_packets: u64,
     max_queue_delay_ms: f64,
@@ -3787,6 +3788,7 @@ fn collect_fifty_stream_report(
     FiftyStreamReport {
         sent_packets,
         delivered_packets,
+        delivered_bytes,
         dropped_packets,
         max_queue_packets,
         max_queue_delay_ms,

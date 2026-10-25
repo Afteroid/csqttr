@@ -42,7 +42,7 @@ internal fun WebPanelInfoDialog(onDismiss: () -> Unit) {
             ) {
                 Text("Веб-панель управления", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    text = "У CSQTT есть собственная веб-панель управления сервером. По умолчанию она расположена на порту 46002; если включить режим ручных портов, порт можно изменить на свой. Если в поле «IP сервера или домен» указано доменное имя, панель всегда работает на порту 443 — по адресу https://домен, без порта.",
+                    text = "У CSQTT есть собственная веб-панель управления сервером. По умолчанию она расположена на порту 46002; если включить режим ручных портов, порт можно изменить на свой.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 16.sp,

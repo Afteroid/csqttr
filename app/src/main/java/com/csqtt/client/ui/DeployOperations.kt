@@ -3,7 +3,6 @@ package com.csqtt.client.ui
 import android.content.Context
 import com.csqtt.client.CsqttConstants
 import com.csqtt.client.DeployManager
-import com.csqtt.client.PanelHostPolicy
 import com.csqtt.client.SshHostKeyStore
 import com.csqtt.client.TunnelManager
 import net.schmizz.sshj.SSHClient as SshjClient
@@ -548,100 +547,6 @@ private val BENIGN_STDERR = Regex(
 
 private fun isBenignStderr(line: String): Boolean = BENIGN_STDERR.containsMatchIn(line)
 
-private const val DOMAIN_CHECK_ATTEMPTS = 3
-private const val DOMAIN_CHECK_DELAY_MS = 5000L
-private const val DOMAIN_CHECK_TIMEOUT_MS = 30000L
-
-private data class PanelDomainAddresses(
-    val egressIp: String,
-    val ipv4: List<String>,
-    val ipv6: List<String>,
-)
-
-private fun panelDomainProbeCommand(host: String): String = buildString {
-    append("egress=\"\$(ip -4 route get 77.88.8.8 2>/dev/null")
-    append(" | awk '{for(i=1;i<=NF;i++) if(\$i==\"src\") print \$(i+1)}'")
-    append(" | head -n 1)\"; ")
-    append("if [ -z \"\$egress\" ]; then egress=\"\$(curl -4 -fsS --connect-timeout 3 --max-time 7")
-    append(" https://api.ipify.org 2>/dev/null | tr -d '[:space:]')\"; fi; ")
-    append("addresses=\"\$(getent ahosts ${shellQuote(host)} 2>/dev/null | awk '{print \$1}' | sort -u)\"; ")
-    append("v4=\"\$(printf '%s\\n' \"\$addresses\" | grep -v ':' | tr '\\n' ' ')\"; ")
-    append("v6=\"\$(printf '%s\\n' \"\$addresses\" | grep ':' | tr '\\n' ' ')\"; ")
-    append("printf 'EGRESS_IP=%s\\nA=%s\\nAAAA=%s\\n' \"\$egress\" \"\$v4\" \"\$v6\"")
-}
-
-private fun splitAddresses(value: String): List<String> =
-    value.split(' ', '\t').map(String::trim).filter(String::isNotEmpty)
-
-private fun parsePanelDomainAddresses(output: String): PanelDomainAddresses {
-    var egressIp = ""
-    val reported = mutableListOf<String>()
-    output.lineSequence().forEach { rawLine ->
-        val line = rawLine.trim()
-        when {
-            line.startsWith("EGRESS_IP=") -> egressIp = line.removePrefix("EGRESS_IP=").trim()
-            line.startsWith("A=") -> reported += splitAddresses(line.removePrefix("A="))
-            line.startsWith("AAAA=") -> reported += splitAddresses(line.removePrefix("AAAA="))
-        }
-    }
-    // Семью определяет наличие ':', а не метка строки: getent может вернуть IPv6 в A.
-    val addresses = reported.distinct()
-    return PanelDomainAddresses(
-        egressIp = egressIp,
-        ipv4 = addresses.filterNot { it.contains(':') },
-        ipv6 = addresses.filter { it.contains(':') },
-    )
-}
-
-private fun panelDomainFailure(host: String, addresses: PanelDomainAddresses): String? {
-    if (addresses.egressIp.isEmpty()) {
-        return "Не удалось определить публичный IPv4 сервера"
-    }
-    if (addresses.ipv4.isEmpty()) {
-        return "A-запись для $host не найдена"
-    }
-    if (addresses.ipv6.isNotEmpty()) {
-        return "У $host есть AAAA-запись; панель работает только по IPv4, удалите её"
-    }
-    if (addresses.egressIp !in addresses.ipv4) {
-        return "$host указывает на ${addresses.ipv4.joinToString(", ")}, а сервер на ${addresses.egressIp}. " +
-            "Если домен за Cloudflare, выключите проксирование (серое облако)"
-    }
-    return null
-}
-
-/**
- * Проверка «домен указывает именно на этот VPS» до первой загрузки: установка
- * ещё ничего не изменила, поэтому отказ здесь ничего не ломает.
- */
-private suspend fun verifyPanelDomain(sshClient: DeploySSHClient, host: String) {
-    val command = panelDomainProbeCommand(host)
-    var failure = "Не удалось проверить домен $host"
-    repeat(DOMAIN_CHECK_ATTEMPTS) { attempt ->
-        val result = sshClient.execResult(command, timeout = DOMAIN_CHECK_TIMEOUT_MS)
-        if (result.exitStatus != 0) {
-            failure = "Не удалось проверить домен $host: ${result.output.trim().take(160)}"
-        } else {
-            val addresses = parsePanelDomainAddresses(result.output)
-            val problem = panelDomainFailure(host, addresses)
-            if (problem == null) {
-                TunnelManager.addDeploySuccessLog(
-                    "Домен $host указывает на этот сервер (${addresses.egressIp})",
-                )
-                return
-            }
-            failure = problem
-        }
-        if (attempt < DOMAIN_CHECK_ATTEMPTS - 1) {
-            TunnelManager.addDeployWarningLog(
-                "${failure.take(200)}. Повторная проверка через ${DOMAIN_CHECK_DELAY_MS / 1000} с",
-            )
-            kotlinx.coroutines.delay(DOMAIN_CHECK_DELAY_MS)
-        }
-    }
-    throw IOException(failure)
-}
-
 internal suspend fun performDeploy(
     context: Context,
     host: String, user: String, pass: String, port: Int,
@@ -657,13 +562,6 @@ internal suspend fun performDeploy(
     var ssh: SshjClient? = null
     var tempDir: File? = null
     try {
-        val panelHost = PanelHostPolicy.normalizeHost(host)
-        if (PanelHostPolicy.isPrivateHost(panelHost)) {
-            throw IOException(
-                "Панель и туннель требуют публичный IPv4 или домен: " +
-                    "$panelHost недостижим с TURN-релея и из интернета",
-            )
-        }
         TunnelManager.beginDeployLog("Начало установки на $host:$port")
         onProgress(0.02f, "Подключение...")
 
@@ -686,12 +584,6 @@ internal suspend fun performDeploy(
         }
         val serverArchitecture = serverArchitectureForMachine(architectureResult.output)
         TunnelManager.addDeployInfoLog("Архитектура VPS: ${serverArchitecture.displayName}")
-
-        if (PanelHostPolicy.isDomainHost(panelHost)) {
-            onProgress(0.04f, "Проверка домена...")
-            TunnelManager.addDeployInfoLog("Проверка A/AAAA-записей домена $panelHost")
-            verifyPanelDomain(sshClient, panelHost)
-        }
 
         onProgress(0.05f, "Подготовка файлов...")
         TunnelManager.addDeployInfoLog("Подготовка файлов установки")
@@ -719,7 +611,7 @@ internal suspend fun performDeploy(
                 buildString {
                     appendLine("CSQTT_WEB_USER=${deployEnvironmentValue(webLogin, installInDocker)}")
                     appendLine("CSQTT_WEB_PASS=${deployEnvironmentValue(webPass, installInDocker)}")
-                    appendLine("CSQTT_PUBLIC_IP=${deployEnvironmentValue(panelHost, installInDocker)}")
+                    appendLine("CSQTT_PUBLIC_IP=${deployEnvironmentValue(host.trim(), installInDocker)}")
                     if (secretPath.isNotBlank()) {
                         appendLine("CSQTT_WEB_SECRET_PATH=${deployEnvironmentValue(secretPath.trim(), installInDocker)}")
                     }
@@ -740,7 +632,7 @@ internal suspend fun performDeploy(
 
         val secretEnv = if (secretPath.isNotBlank()) "CSQTT_WEB_SECRET_PATH=${deployEnvironmentValue(secretPath.trim(), false)} " else ""
         val deployEnvironment =
-            "env ${secretEnv}CSQTT_PEER_PORT=$peerPort CSQTT_SSH_PORT=$port CSQTT_WEB_PORT=$webPort CSQTT_PUBLIC_IP=$panelHost " +
+            "env ${secretEnv}CSQTT_PEER_PORT=$peerPort CSQTT_SSH_PORT=$port CSQTT_WEB_PORT=$webPort CSQTT_PUBLIC_IP=${host.trim()} " +
                 "CSQTT_DEPLOY_MODE=${deployMode(installInDocker)}"
         onProgress(0.10f, "Загрузка нового сервера...")
         sshClient.upload(serverFile, "/tmp/.csqtt-upload-server")
