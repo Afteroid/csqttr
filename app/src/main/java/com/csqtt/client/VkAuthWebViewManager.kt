@@ -191,6 +191,9 @@ internal class VkAuthSession(
         view.webViewClient = object : WebViewClient() {
             override fun onPageFinished(v: WebView, url: String) {
                 installTelevisionNavigation(v)
+                if (url.contains("access_token=")) {
+                    handleUrl(url)
+                }
                 if (!uiReadyReported) {
                     uiReadyReported = true
                     onUiReady()
@@ -206,6 +209,11 @@ internal class VkAuthSession(
             }
 
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                val url = request.url.toString()
+                if (url.contains("access_token=")) {
+                    handleUrl(url)
+                    return true
+                }
                 val path = request.url.path ?: ""
                 if (phase == VkAuthPhase.LOGIN && (path.startsWith("/feed") || isVkLoggedIn())) {
                     switchToTokenPhase(v)
@@ -402,12 +410,16 @@ internal class VkAuthSession(
     }
 
     private fun handleUrl(url: String) {
-        val uri = runCatching { url.toUri() }.getOrNull() ?: return
-        val fragment = uri.fragment ?: return
+        val uri = runCatching { url.toUri() }.getOrNull()
+        val raw = uri?.fragment ?: url.substringAfter("#", "").ifEmpty { url.substringAfter("?", "") }
+        val fragment = raw.substringAfter("#").substringAfter("?")
         when {
-            fragment.contains("access_token=") -> handleAccessToken(fragment)
+            fragment.contains("access_token=") || url.contains("access_token=") -> {
+                val target = if (fragment.contains("access_token=")) fragment else url.substringAfter("access_token=")
+                handleAccessToken(if (target.startsWith("access_token=")) target else "access_token=$target")
+            }
             fragment.startsWith("payload=") -> {
-                val host = uri.host.orEmpty()
+                val host = uri?.host.orEmpty()
                 if (host == "oauth.vk.com" || host == "oauth.vk.ru" || host == "vkhost.github.io") {
                     handleSilentPayload(fragment)
                 }
@@ -417,7 +429,8 @@ internal class VkAuthSession(
     }
 
     private fun handleAccessToken(fragment: String) {
-        val params = parseFragmentParams(fragment)
+        val clean = fragment.substringAfter('#').substringAfter('?')
+        val params = parseFragmentParams(clean)
         val token = params["access_token"]
         if (token.isNullOrBlank()) {
             finishWithError("Не удалось извлечь access_token из URL")
@@ -433,7 +446,10 @@ internal class VkAuthSession(
             nonPermanentRetried = true
             repeatAuthorization()
         } else {
-            finishWithError("VK выдал токен с ограниченным сроком действия. Попробуйте еще раз.")
+            finished = true
+            mainHandler.removeCallbacksAndMessages(null)
+            runCatching { CookieManager.getInstance().flush() }
+            onToken(VkAuthPayload(token = token, userId = params["user_id"].orEmpty(), expiresIn = expiresIn))
         }
     }
 

@@ -27,7 +27,8 @@ internal object WorkerCountPolicy {
         manualHashCount: Int,
     ): Int = CsqttConstants.Tunnel.MAX_WORKERS
 
-    fun defaultMaximum(extraWorkers: Boolean = false): Int = CsqttConstants.Tunnel.MAX_WORKERS
+    fun defaultMaximum(extraWorkers: Boolean = false): Int =
+        if (extraWorkers) CsqttConstants.Tunnel.MAX_WORKERS else CsqttConstants.Tunnel.DEFAULT_MAX_WORKERS
 
     fun normalizeForHashes(requested: Int, hashCount: Int): Int =
         normalize(requested, maximumForHashes(hashCount))

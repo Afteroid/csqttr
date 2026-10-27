@@ -23,10 +23,10 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.csqtt.client.CsqttConstants
-import com.csqtt.client.ui.design.CsqttDarkExtendedColors
-import com.csqtt.client.ui.design.CsqttLightExtendedColors
-import com.csqtt.client.ui.design.CsqttMaterialShapes
-import com.csqtt.client.ui.design.LocalCsqttExtendedColors
+import com.csqtt.client.ui.legacy.design.CsqttDarkExtendedColors
+import com.csqtt.client.ui.legacy.design.CsqttLightExtendedColors
+import com.csqtt.client.ui.legacy.design.CsqttMaterialShapes
+import com.csqtt.client.ui.legacy.design.LocalCsqttExtendedColors
 
 val CSQTTTypography = Typography(
     displayLarge = TextStyle(fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 57.sp, lineHeight = 64.sp),

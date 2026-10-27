@@ -1,4 +1,4 @@
-package com.csqtt.client.ui
+package com.csqtt.client.ui.legacy
 
 import java.io.File
 import org.junit.Assert.assertFalse
@@ -16,8 +16,8 @@ class DeployScriptPreflightTest {
 
     private fun deployOperations(): String {
         val candidates = listOf(
-            File("app/src/main/java/com/csqtt/client/ui/DeployOperations.kt"),
-            File("src/main/java/com/csqtt/client/ui/DeployOperations.kt"),
+            File("app/src/main/java/com/csqtt/client/ui/legacy/DeployOperations.kt"),
+            File("src/main/java/com/csqtt/client/ui/legacy/DeployOperations.kt"),
         )
         return candidates.first(File::isFile).readText().replace("\r\n", "\n")
     }
@@ -45,7 +45,7 @@ class DeployScriptPreflightTest {
     @Test
     fun `client uploads the release before one atomic runtime switch`() {
         val deploy = script()
-        val installBranch = deploy.substringAfter("install|--install|-i)")
+        val installBranch = deploy.substringAfter("install|--install|-i|update|--update|-up)")
         val uploadCheck = installBranch.indexOf("prepare_uploaded_release")
         val cleanup = installBranch.indexOf("csqtt_cleanup")
         val binary = installBranch.indexOf("setup_csqtt_binary")
@@ -63,7 +63,7 @@ class DeployScriptPreflightTest {
 
         val client = deployOperations()
         assertFalse(client.contains("bash /tmp/deploy.sh prepare"))
-        assertTrue(client.indexOf("/tmp/.csqtt-upload-server") < client.indexOf("bash /tmp/deploy.sh install"))
+        assertTrue(client.indexOf("/tmp/.csqtt-upload-server") < client.indexOf("bash /tmp/deploy.sh \${mode.scriptAction}"))
     }
 
     @Test
@@ -307,7 +307,7 @@ class DeployScriptPreflightTest {
             assertTrue(preflight, p.contains("refuse_foreign_port_holder u \"\$PEER_PORT\""))
             assertTrue(preflight, p.contains("refuse_foreign_port_holder t \"\$WEB_PORT\""))
         }
-        val install = deploy.substringAfter("install|--install|-i)")
+        val install = deploy.substringAfter("install|--install|-i|update|--update|-up)")
         assertTrue(install.indexOf("main_preflight") in 0 until install.indexOf("csqtt_cleanup"))
         // a live interface another process holds (its fdinfo names it: "iff:") is never deleted as a leftover
         val tun = body("tun_holder_pids")
@@ -353,7 +353,7 @@ class DeployScriptPreflightTest {
         assertTrue(uninstall.indexOf("main_place_strangers") in 0 until uninstall.indexOf("remove_all_csqtt_docker_containers"))
         // a unit between crash restarts is a running server, not a stopped leftover
         assertTrue(body("main_place_strangers").contains("unit_live"))
-        val install = deploy.substringAfter("install|--install|-i)")
+        val install = deploy.substringAfter("install|--install|-i|update|--update|-up)")
         assertTrue(install.indexOf("main_preflight") in 0 until install.indexOf("csqtt_cleanup"))
         // 2.1.9's cascade helper (/usr/local/bin/csqtt-cascade) matches the stock pattern but is the standard place's own
         val units = Regex("STANDARD_PLACE_UNITS=\"([^\"]+)\"").find(deploy)!!.groupValues[1].split(" ")

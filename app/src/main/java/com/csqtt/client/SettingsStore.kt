@@ -26,6 +26,7 @@ private fun <T> Flow<T>.onIo(): Flow<T> = flowOn(Dispatchers.IO)
 internal data class DeploySettingsSnapshot(
     val profile: Int = -1,
     val ip: String = "",
+    val serverName: String = "",
     val sshLogin: String = "",
     val sshPassword: String = "",
     val webLogin: String = "",
@@ -39,6 +40,14 @@ internal data class DeploySettingsSnapshot(
     val dockerInstall: Boolean = false,
     val secretPathEnabled: Boolean = true,
     val secretPathUuid: String = "",
+    val serverConfigured: Boolean = false,
+    val lastInspectionAtMs: Long = 0L,
+    val lastInspectionOk: Boolean = false,
+    val lastInspectionArch: String = "",
+    val lastInspectionServiceStatus: String = "",
+    val lastInspectionVersion: String = "",
+    val lastInspectionMessage: String = "",
+    val lastPanelAvailable: Boolean = false,
     val sshPrivateKey: String = "",
     val sshKeyPassphrase: String = "",
     val sshCertificate: String = "",
@@ -46,6 +55,17 @@ internal data class DeploySettingsSnapshot(
     val isLoaded: Boolean
         get() = profile >= 0
 }
+
+/** A csqtt:// link materialized into profile fields on import. */
+internal data class ImportedConnectionSettings(
+    val host: String,
+    val port: Int,
+    val password: String,
+    val hashes: List<String> = emptyList(),
+    val vkAccessToken: String = "",
+    val power: Int? = null,
+    val name: String? = null,
+)
 
 internal data class TunnelAuthSnapshot(
     val profile: Int = -1,
@@ -56,6 +76,98 @@ internal data class TunnelAuthSnapshot(
 ) {
     val isLoaded: Boolean
         get() = profile >= 0
+}
+
+/** Snapshot of the connection settings of a concrete profile slot (not necessarily active). */
+internal data class ProfileConnectionSnapshot(
+    val peer: String = "",
+    val serverPeerPort: Int = CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT,
+    val connectionPassword: String = "",
+    val connectionPasswordState: StoredSecretState = StoredSecretState.Missing,
+    val workersPerHash: Int = 18,
+    val extraWorkers: Boolean = false,
+    val csqttLink: String = "",
+    val csqttLinkMode: Boolean = false,
+    val subscriptionUrl: String = "",
+    val subscriptionTitle: String = "",
+    val subscriptionPower: Int = 0,
+)
+
+internal data class ProfileSubscriptionInfo(
+    val url: String,
+    val title: String,
+    val subUuid: String,
+    val nodeName: String,
+    val powerLimit: Int,
+)
+
+/** A profile slot that has a server configured on the deploy screen. */
+internal data class DeployServerInfo(
+    val profile: Int,
+    val name: String,
+    val ip: String,
+    val configured: Boolean = false,
+    val installedVersion: String = "",
+    val serviceStatus: String = "",
+    val panelAvailable: Boolean = false,
+)
+
+internal data class SubscriptionMeta(
+    val url: String = "",
+    val title: String = "",
+    val autoUpdateMinutes: Int = 0,
+    val lastUpdatedAt: Long = 0L,
+    val lastAttemptAt: Long = 0L,
+    val allowHttp: Boolean = false,
+) {
+    fun needsUpdate(now: Long): Boolean {
+        if (autoUpdateMinutes <= 0 || url.isBlank()) return false
+        val last = maxOf(lastUpdatedAt, lastAttemptAt)
+        return last == 0L || now - last >= autoUpdateMinutes * 60_000L
+    }
+}
+
+internal fun defaultProfileName(index: Int): String = "Профиль ${index + 1}"
+
+private fun decodeSubscriptionMeta(raw: String?): Map<String, SubscriptionMeta> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    val json = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
+    val result = linkedMapOf<String, SubscriptionMeta>()
+    val keys = json.keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        val entry = json.optJSONObject(key) ?: continue
+        val url = entry.optString("url").trim().ifEmpty { key.trim() }
+        if (url.isEmpty()) continue
+        result[url] = SubscriptionMeta(
+            url = url,
+            title = entry.optString("title").trim(),
+            autoUpdateMinutes = entry.optInt("autoUpdateMinutes", 0).coerceAtLeast(0),
+            lastUpdatedAt = entry.optLong("lastUpdatedAt", 0L).coerceAtLeast(0L),
+            lastAttemptAt = entry.optLong("lastAttemptAt", 0L).coerceAtLeast(0L),
+            allowHttp = entry.optBoolean("allowHttp", false),
+        )
+    }
+    return result
+}
+
+private fun encodeSubscriptionMeta(meta: Map<String, SubscriptionMeta>): String {
+    val json = JSONObject()
+    for ((key, value) in meta) {
+        if (key.isBlank()) continue
+        json.put(
+            key,
+            JSONObject().apply {
+                put("url", value.url)
+                put("title", value.title)
+                put("autoUpdateMinutes", value.autoUpdateMinutes)
+                put("lastUpdatedAt", value.lastUpdatedAt)
+                put("lastAttemptAt", value.lastAttemptAt)
+                put("allowHttp", value.allowHttp)
+            },
+        )
+    }
+    return json.toString()
 }
 
 class SettingsStore(context: Context) {
@@ -70,6 +182,12 @@ class SettingsStore(context: Context) {
         private val CSQTT_LINK = stringPreferencesKey("csqtt_link")
         private val CSQTT_LINK_MODE = booleanPreferencesKey("csqtt_link_mode")
         private val PARTICIPANT_SHOW_LOGS = booleanPreferencesKey("participant_show_logs")
+        private val SUBSCRIPTION_URL = stringPreferencesKey("subscription_url")
+        private val SUBSCRIPTION_TITLE = stringPreferencesKey("subscription_title")
+        private val SUBSCRIPTION_UUID = stringPreferencesKey("subscription_uuid")
+        private val SUBSCRIPTION_NODE = stringPreferencesKey("subscription_node")
+        private val SUBSCRIPTION_POWER = intPreferencesKey("subscription_power")
+        private val SUBSCRIPTION_META = stringPreferencesKey("subscription_meta_v1")
 
         private val PEER = stringPreferencesKey("peer")
         private val VK_HASHES = stringPreferencesKey("vk_hashes")
@@ -89,14 +207,24 @@ class SettingsStore(context: Context) {
         private val PROFILE_NAME = stringPreferencesKey("profile_name")
 
         private val DEPLOY_IP = stringPreferencesKey("deploy_ip")
+        private val DEPLOY_SERVER_NAME = stringPreferencesKey("deploy_server_name")
+        private val DEPLOY_PROFILE_NAMES_CLEANED = booleanPreferencesKey("deploy_profile_names_cleaned_v2")
         private val DEPLOY_LOGIN = stringPreferencesKey("deploy_login")
         private val DEPLOY_PASSWORD = stringPreferencesKey("deploy_password")
         private val DEPLOY_PASSWORD_ENCRYPTED = stringPreferencesKey("deploy_password_encrypted")
         private val DEPLOY_SSH_PORT = stringPreferencesKey("deploy_ssh_port")
         private val SSH_KEYS_MODE = booleanPreferencesKey("ssh_keys_mode")
         private val DOCKER_INSTALL = booleanPreferencesKey("docker_install")
-        private val DEPLOY_SECRET_PATH_ENABLED = booleanPreferencesKey("deploy_secret_path_enabled")
-        private val DEPLOY_SECRET_PATH_UUID = stringPreferencesKey("deploy_secret_path_uuid")
+private val DEPLOY_SECRET_PATH_ENABLED = booleanPreferencesKey("deploy_secret_path_enabled")
+private val DEPLOY_SECRET_PATH_UUID = stringPreferencesKey("deploy_secret_path_uuid")
+private val DEPLOY_SERVER_CONFIGURED = booleanPreferencesKey("deploy_server_configured")
+private val DEPLOY_LAST_INSPECTION_AT = longPreferencesKey("deploy_last_inspection_at")
+private val DEPLOY_LAST_INSPECTION_OK = booleanPreferencesKey("deploy_last_inspection_ok")
+private val DEPLOY_LAST_INSPECTION_ARCH = stringPreferencesKey("deploy_last_inspection_arch")
+private val DEPLOY_LAST_INSPECTION_SERVICE = stringPreferencesKey("deploy_last_inspection_service")
+private val DEPLOY_LAST_INSPECTION_VERSION = stringPreferencesKey("deploy_last_inspection_version")
+private val DEPLOY_LAST_INSPECTION_MESSAGE = stringPreferencesKey("deploy_last_inspection_message")
+private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_inspection_panel")
         private val SSH_PRIVATE_KEY = stringPreferencesKey("ssh_private_key")
         private val SSH_PRIVATE_KEY_ENCRYPTED = stringPreferencesKey("ssh_private_key_encrypted")
         private val SSH_KEY_PASSPHRASE = stringPreferencesKey("ssh_key_passphrase")
@@ -257,6 +385,9 @@ class SettingsStore(context: Context) {
         @Volatile
         internal var cachedDirectIpsWhite: String? = null
 
+        @Volatile
+        internal var cachedDeploySnapshot: DeploySettingsSnapshot = DeploySettingsSnapshot()
+
         private val uiCacheStarted = java.util.concurrent.atomic.AtomicBoolean(false)
         private val migrationsStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -265,9 +396,9 @@ class SettingsStore(context: Context) {
             val newName = "${baseKey.name}_$profile"
             @Suppress("UNCHECKED_CAST")
             return when (baseKey) {
-                PEER, VK_HASHES, SECONDARY_VK_HASH, PROTOCOL, SNI, USER_AGENT, DEPLOY_IP, DEPLOY_LOGIN, DEPLOY_PASSWORD, DEPLOY_PASSWORD_ENCRYPTED, DEPLOY_SSH_PORT, EXCLUDED_APPS, WHITELIST_APPS, DIRECT_DOMAINS, DIRECT_DOMAINS_BLACK, DIRECT_DOMAINS_WHITE, DIRECT_IPS_BLACK, DIRECT_IPS_WHITE, CONNECTION_PASSWORD, CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD_LOCAL, DEPLOY_MAIN_PASSWORD, DEPLOY_MAIN_PASSWORD_ENCRYPTED, DEPLOY_WEB_LOGIN, DEPLOY_WEB_PASSWORD, DEPLOY_WEB_PASSWORD_ENCRYPTED, PROXY_MODE, PROXY_HOST, VK_AUTH_MODE, OBFS_MODE, TURN_TRANSPORT, SRTP_MODE, CAPTCHA_MODE, CAPTCHA_SOLVE_METHOD, CAPTCHA_WBV_SOLVE_METHOD, CSQTT_LINK, SELECTED_FINGERPRINT, ACTIVE_CLIENT_IDS, VK_HASH_MODE, VK_ACCESS_TOKEN, VK_ACCESS_TOKEN_ENCRYPTED, VK_ACCESS_TOKEN_USER_ID, SSH_PRIVATE_KEY, SSH_PRIVATE_KEY_ENCRYPTED, SSH_KEY_PASSPHRASE, SSH_KEY_PASSPHRASE_ENCRYPTED, SSH_CERTIFICATE, SSH_CERTIFICATE_ENCRYPTED, VK_HASH_CHECK_RESULTS, CLIENT_ID_CHECK_RESULTS, CUSTOM_TURN_IPS, SELECTED_TURN_SUBNET -> stringPreferencesKey(newName) as Preferences.Key<T>
-                WORKERS_PER_HASH, LISTEN_PORT, SERVER_PEER_PORT, PROXY_PORT, SERVER_WEB_PORT -> intPreferencesKey(newName) as Preferences.Key<T>
-                MANUAL_PORTS_ENABLED, NO_DNS, IS_WHITELIST, CSQTT_LINK_MODE, DETAILED_LOGS, SSH_KEYS_MODE, DOCKER_INSTALL, EXTRA_WORKERS, SPLIT_TUNNEL_WHITELIST_MIGRATED, DOMAIN_ROUTING_ENABLED, DOMAIN_IS_WHITELIST, EXCLUDE_RU_ZONES_ENABLED, TEMPLATE_DOMAINS_ENABLED, IP_ROUTING_ENABLED, IP_IS_WHITELIST -> booleanPreferencesKey(newName) as Preferences.Key<T>
+                PEER, VK_HASHES, SECONDARY_VK_HASH, PROTOCOL, SNI, USER_AGENT, DEPLOY_IP, DEPLOY_LOGIN, DEPLOY_PASSWORD, DEPLOY_PASSWORD_ENCRYPTED, DEPLOY_SSH_PORT, EXCLUDED_APPS, WHITELIST_APPS, DIRECT_DOMAINS, DIRECT_DOMAINS_BLACK, DIRECT_DOMAINS_WHITE, DIRECT_IPS_BLACK, DIRECT_IPS_WHITE, CONNECTION_PASSWORD, CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD_LOCAL, DEPLOY_MAIN_PASSWORD, DEPLOY_MAIN_PASSWORD_ENCRYPTED, DEPLOY_WEB_LOGIN, DEPLOY_WEB_PASSWORD, DEPLOY_WEB_PASSWORD_ENCRYPTED, PROXY_MODE, PROXY_HOST, VK_AUTH_MODE, OBFS_MODE, TURN_TRANSPORT, SRTP_MODE, CAPTCHA_MODE, CAPTCHA_SOLVE_METHOD, CAPTCHA_WBV_SOLVE_METHOD, CSQTT_LINK, SELECTED_FINGERPRINT, ACTIVE_CLIENT_IDS, VK_HASH_MODE, VK_ACCESS_TOKEN, VK_ACCESS_TOKEN_ENCRYPTED, VK_ACCESS_TOKEN_USER_ID, SSH_PRIVATE_KEY, SSH_PRIVATE_KEY_ENCRYPTED, SSH_KEY_PASSPHRASE, SSH_KEY_PASSPHRASE_ENCRYPTED, SSH_CERTIFICATE, SSH_CERTIFICATE_ENCRYPTED, VK_HASH_CHECK_RESULTS, CLIENT_ID_CHECK_RESULTS, CUSTOM_TURN_IPS, SELECTED_TURN_SUBNET, SUBSCRIPTION_URL, SUBSCRIPTION_TITLE, SUBSCRIPTION_UUID, SUBSCRIPTION_NODE -> stringPreferencesKey(newName) as Preferences.Key<T>
+                WORKERS_PER_HASH, LISTEN_PORT, SERVER_PEER_PORT, PROXY_PORT, SERVER_WEB_PORT, SUBSCRIPTION_POWER -> intPreferencesKey(newName) as Preferences.Key<T>
+                MANUAL_PORTS_ENABLED, NO_DNS, IS_WHITELIST, CSQTT_LINK_MODE, DETAILED_LOGS, SSH_KEYS_MODE, DOCKER_INSTALL, EXTRA_WORKERS, SPLIT_TUNNEL_WHITELIST_MIGRATED, DOMAIN_ROUTING_ENABLED, DOMAIN_IS_WHITELIST, EXCLUDE_RU_ZONES_ENABLED, TEMPLATE_DOMAINS_ENABLED, IP_ROUTING_ENABLED, IP_IS_WHITELIST, DEPLOY_SERVER_CONFIGURED -> booleanPreferencesKey(newName) as Preferences.Key<T>
                 CONNECTION_GENERATION -> longPreferencesKey(newName) as Preferences.Key<T>
                 else -> stringPreferencesKey(newName) as Preferences.Key<T>
             }
@@ -318,7 +449,11 @@ class SettingsStore(context: Context) {
     val workersPerHash: Flow<Int> = dataStore.data.map { prefs ->
         val profile = prefs[ACTIVE_PROFILE] ?: 0
         val isExtra = prefs[getProfileKey(EXTRA_WORKERS, profile)] ?: false
-        val max = WorkerCountPolicy.defaultMaximum(isExtra)
+        val defaultMax = WorkerCountPolicy.defaultMaximum(isExtra)
+        val max = prefs[getProfileKey(SUBSCRIPTION_POWER, profile)]
+            ?.takeIf { it in 10..100 }
+            ?.coerceAtMost(defaultMax)
+            ?: defaultMax
         val current = prefs[getProfileKey(WORKERS_PER_HASH, profile)] ?: 18
         WorkerCountPolicy.normalize(current, maximum = max)
     }
@@ -364,6 +499,7 @@ class SettingsStore(context: Context) {
         DeploySettingsSnapshot(
             profile = profile,
             ip = prefs[getProfileKey(DEPLOY_IP, profile)] ?: "",
+            serverName = prefs[getProfileKey(DEPLOY_SERVER_NAME, profile)] ?: "",
             sshLogin = prefs[getProfileKey(DEPLOY_LOGIN, profile)] ?: "",
             sshPassword = readSecret(prefs, DEPLOY_PASSWORD_ENCRYPTED, DEPLOY_PASSWORD, profile),
             webLogin = prefs[getProfileKey(DEPLOY_WEB_LOGIN, profile)] ?: "",
@@ -381,6 +517,14 @@ class SettingsStore(context: Context) {
             dockerInstall = prefs[getProfileKey(DOCKER_INSTALL, profile)] ?: false,
             secretPathEnabled = true,
             secretPathUuid = prefs[getProfileKey(DEPLOY_SECRET_PATH_UUID, profile)] ?: "",
+            serverConfigured = prefs[getProfileKey(DEPLOY_SERVER_CONFIGURED, profile)] ?: false,
+            lastInspectionAtMs = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_AT, profile)] ?: 0L,
+            lastInspectionOk = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_OK, profile)] ?: false,
+            lastInspectionArch = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_ARCH, profile)] ?: "",
+            lastInspectionServiceStatus = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_SERVICE, profile)] ?: "",
+            lastInspectionVersion = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_VERSION, profile)] ?: "",
+            lastInspectionMessage = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_MESSAGE, profile)] ?: "",
+            lastPanelAvailable = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_PANEL, profile)] ?: false,
             sshPrivateKey = readSecret(prefs, SSH_PRIVATE_KEY_ENCRYPTED, SSH_PRIVATE_KEY, profile),
             sshKeyPassphrase = readSecret(prefs, SSH_KEY_PASSPHRASE_ENCRYPTED, SSH_KEY_PASSPHRASE, profile),
             sshCertificate = readSecret(prefs, SSH_CERTIFICATE_ENCRYPTED, SSH_CERTIFICATE, profile),
@@ -586,14 +730,79 @@ class SettingsStore(context: Context) {
     val profileNames: Flow<Map<Int, String>> = dataStore.data.map { prefs ->
         (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX).associateWith { p ->
             val name = prefs[getProfileKey(PROFILE_NAME, p)]
-            if (name.isNullOrBlank()) "Профиль $p" else name
+            if (name.isNullOrBlank()) defaultProfileName(p) else name
         }
+    }
+
+    /** Every profile slot that has a server configured on the deploy screen. */
+    internal val deployServers: Flow<List<DeployServerInfo>> = dataStore.data.map { prefs ->
+        (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX).mapNotNull { p ->
+            val ip = prefs[getProfileKey(DEPLOY_IP, p)]?.trim().orEmpty()
+            if (ip.isEmpty()) return@mapNotNull null
+            val configured = prefs[getProfileKey(DEPLOY_SERVER_CONFIGURED, p)] ?: false
+            val inspectionOk = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_OK, p)] ?: false
+            val serviceStatus = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_SERVICE, p)] ?: ""
+            val installedVersion = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_VERSION, p)] ?: ""
+            val panelAvailable = prefs[getProfileKey(DEPLOY_LAST_INSPECTION_PANEL, p)] ?: false
+            val deployed = configured || (
+                inspectionOk && (
+                    serviceStatus in listOf("systemd_active", "docker_active", "process_running") ||
+                        panelAvailable ||
+                        (
+                            installedVersion.isNotBlank() &&
+                                installedVersion != "не определена" &&
+                                installedVersion != "unknown"
+                            )
+                    )
+                )
+            DeployServerInfo(
+                profile = p,
+                name = prefs[getProfileKey(DEPLOY_SERVER_NAME, p)]
+                    ?.takeIf { it.isNotBlank() }
+                    ?: "Сервер ${p + 1}",
+                ip = ip,
+                configured = deployed,
+                installedVersion = installedVersion,
+                serviceStatus = serviceStatus,
+                panelAvailable = panelAvailable,
+            )
+        }
+    }
+
+    /** Profile slots that hold a peer or a participant link. */
+    val occupiedProfiles: Flow<Set<Int>> = dataStore.data.map { prefs ->
+        (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX)
+            .filter { p ->
+                !prefs[getProfileKey(PEER, p)].isNullOrBlank() ||
+                    !prefs[getProfileKey(CSQTT_LINK, p)].isNullOrBlank()
+            }
+            .toSet()
+    }
+
+    /** Subscription metadata of every slot imported from a subscription. */
+    internal val profileSubscriptions: Flow<Map<Int, ProfileSubscriptionInfo>> = dataStore.data.map { prefs ->
+        (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX).mapNotNull { p ->
+            val url = prefs[getProfileKey(SUBSCRIPTION_URL, p)]?.trim().orEmpty()
+            if (url.isEmpty()) return@mapNotNull null
+            p to ProfileSubscriptionInfo(
+                url = url,
+                title = prefs[getProfileKey(SUBSCRIPTION_TITLE, p)]?.trim().orEmpty(),
+                subUuid = prefs[getProfileKey(SUBSCRIPTION_UUID, p)].orEmpty(),
+                nodeName = prefs[getProfileKey(SUBSCRIPTION_NODE, p)]?.trim().orEmpty(),
+                powerLimit = prefs[getProfileKey(SUBSCRIPTION_POWER, p)] ?: 0,
+            )
+        }.toMap()
+    }
+
+    /** Subscription-level metadata keyed by subscription URL. */
+    internal val subscriptionMeta: Flow<Map<String, SubscriptionMeta>> = dataStore.data.map { prefs ->
+        decodeSubscriptionMeta(prefs[SUBSCRIPTION_META])
     }
 
     suspend fun saveProfileName(profile: Int, name: String) {
         dataStore.edit { prefs ->
             val trimmed = name.trim()
-            if (trimmed.isEmpty() || trimmed == "Профиль $profile") {
+            if (trimmed.isEmpty() || trimmed == defaultProfileName(profile)) {
                 prefs.remove(getProfileKey(PROFILE_NAME, profile))
             } else {
                 prefs[getProfileKey(PROFILE_NAME, profile)] = trimmed
@@ -601,7 +810,387 @@ class SettingsStore(context: Context) {
         }
     }
 
-    val extraWorkers: Flow<Boolean> = kotlinx.coroutines.flow.flowOf(false)
+    internal suspend fun readProfileConnectionSettings(profile: Int): ProfileConnectionSnapshot =
+        dataStore.data.map { prefs ->
+            val secret = readConnectionPasswordState(prefs, profile)
+            ProfileConnectionSnapshot(
+                peer = prefs[getProfileKey(PEER, profile)] ?: "",
+                serverPeerPort = prefs[getProfileKey(SERVER_PEER_PORT, profile)]
+                    ?: CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT,
+                connectionPassword = secret.value,
+                connectionPasswordState = secret.state,
+                workersPerHash = WorkerCountPolicy.normalize(
+                    prefs[getProfileKey(WORKERS_PER_HASH, profile)] ?: 18,
+                ),
+                extraWorkers = prefs[getProfileKey(EXTRA_WORKERS, profile)] ?: false,
+                csqttLink = prefs[getProfileKey(CSQTT_LINK, profile)] ?: "",
+                csqttLinkMode = prefs[getProfileKey(CSQTT_LINK_MODE, profile)] ?: false,
+                subscriptionUrl = prefs[getProfileKey(SUBSCRIPTION_URL, profile)] ?: "",
+                subscriptionTitle = prefs[getProfileKey(SUBSCRIPTION_TITLE, profile)] ?: "",
+                subscriptionPower = prefs[getProfileKey(SUBSCRIPTION_POWER, profile)] ?: 0,
+            )
+        }.first()
+
+    suspend fun saveProfileConnectionSettings(
+        profile: Int,
+        peer: String,
+        serverPeerPort: Int,
+        connectionPassword: String,
+        workersPerHash: Int,
+    ) {
+        dataStore.edit { prefs ->
+            prefs[getProfileKey(PEER, profile)] = peer.trim()
+            prefs[getProfileKey(SERVER_PEER_PORT, profile)] = serverPeerPort.coerceIn(1, 65535)
+            prefs[getProfileKey(WORKERS_PER_HASH, profile)] =
+                WorkerCountPolicy.normalize(workersPerHash)
+            val localKey = getProfileKey(CONNECTION_PASSWORD_LOCAL, profile)
+            val legacyKey = getProfileKey(CONNECTION_PASSWORD, profile)
+            val encryptedKey = getProfileKey(CONNECTION_PASSWORD_ENCRYPTED, profile)
+            if (connectionPassword.isBlank()) {
+                prefs.remove(localKey)
+            } else {
+                prefs[localKey] = connectionPassword
+            }
+            prefs.remove(legacyKey)
+            prefs.remove(encryptedKey)
+        }
+    }
+
+    suspend fun saveProfileParticipantLink(profile: Int, link: String) {
+        dataStore.edit { prefs ->
+            prefs[getProfileKey(CSQTT_LINK, profile)] = link.trim()
+        }
+    }
+
+    suspend fun saveProfileParticipantMode(profile: Int, enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[getProfileKey(CSQTT_LINK_MODE, profile)] = enabled
+        }
+    }
+
+    /**
+     * Materializes an imported csqtt:// link into profile fields: peer/port, tunnel password,
+     * VK hashes or token, worker limit and name. Participant mode is disabled and the raw link
+     * plus subscription metadata are removed so the profile connects as a regular owner profile.
+     */
+    internal suspend fun saveImportedConnection(profile: Int, imported: ImportedConnectionSettings) {
+        val host = imported.host.trim().removePrefix("[").removeSuffix("]")
+        if (host.isEmpty() || imported.port !in 1..65535 || imported.password.isBlank()) return
+        dataStore.edit { prefs ->
+            prefs[getProfileKey(PEER, profile)] =
+                if (host.contains(':')) "[$host]:${imported.port}" else host
+            prefs[getProfileKey(SERVER_PEER_PORT, profile)] = imported.port
+
+            val localKey = getProfileKey(CONNECTION_PASSWORD_LOCAL, profile)
+            prefs[localKey] = imported.password
+            prefs.remove(getProfileKey(CONNECTION_PASSWORD, profile))
+            prefs.remove(getProfileKey(CONNECTION_PASSWORD_ENCRYPTED, profile))
+
+            prefs[getProfileKey(CSQTT_LINK_MODE, profile)] = false
+            prefs.remove(getProfileKey(CSQTT_LINK, profile))
+            prefs.remove(getProfileKey(SUBSCRIPTION_URL, profile))
+            prefs.remove(getProfileKey(SUBSCRIPTION_TITLE, profile))
+            prefs.remove(getProfileKey(SUBSCRIPTION_UUID, profile))
+            prefs.remove(getProfileKey(SUBSCRIPTION_NODE, profile))
+            prefs.remove(getProfileKey(SUBSCRIPTION_POWER, profile))
+
+            val power = imported.power?.takeIf { it > 0 }?.coerceIn(10, 100)
+            if (power != null) {
+                prefs[getProfileKey(WORKERS_PER_HASH, profile)] =
+                    WorkerCountPolicy.normalize(power, maximum = CsqttConstants.Tunnel.MAX_WORKERS)
+            }
+
+            val hashes = imported.hashes
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+            if (hashes.isNotEmpty()) {
+                prefs[getProfileKey(VK_HASHES, profile)] = hashes.joinToString(",")
+                prefs[getProfileKey(VK_HASH_MODE, profile)] = CsqttConstants.VkAutoHash.MODE_MANUAL
+                prefs[getProfileKey(VK_AUTH_MODE, profile)] = CsqttConstants.VkAuth.MODE_CALLS
+            }
+
+            if (imported.vkAccessToken.isNotBlank()) {
+                prefs.putSecret(VK_ACCESS_TOKEN_ENCRYPTED, VK_ACCESS_TOKEN, imported.vkAccessToken, profile)
+                prefs[getProfileKey(VK_ACCESS_TOKEN_USER_ID, profile)] = ""
+                prefs[getProfileKey(VK_AUTH_MODE, profile)] = CsqttConstants.VkAuth.MODE_CALLS
+                prefs[getProfileKey(VK_HASH_MODE, profile)] = CsqttConstants.VkAutoHash.MODE_AUTO_API
+            }
+
+            val name = imported.name?.trim().orEmpty()
+            if (name.isEmpty() || name == defaultProfileName(profile)) {
+                prefs.remove(getProfileKey(PROFILE_NAME, profile))
+            } else {
+                prefs[getProfileKey(PROFILE_NAME, profile)] = name
+            }
+        }
+    }
+
+    suspend fun saveProfileWorkersPerHash(profile: Int, workersPerHash: Int) {
+        dataStore.edit { prefs ->
+            prefs[getProfileKey(WORKERS_PER_HASH, profile)] =
+                WorkerCountPolicy.normalize(workersPerHash, maximum = CsqttConstants.Tunnel.MAX_WORKERS)
+        }
+    }
+
+    /**
+     * Writes subscription nodes into profile slots as owner profiles.
+     * Peer and password come from the decrypted link; power caps the worker count.
+     */
+    internal suspend fun applySubscriptionImport(writes: List<SubscriptionProfileWrite>) {
+        if (writes.isEmpty()) return
+        dataStore.edit { prefs ->
+            for (write in writes) {
+                val profile = write.profile
+                val host = write.host.trim().removePrefix("[").removeSuffix("]")
+                if (host.isEmpty() || write.port !in 1..65535) continue
+
+                prefs[getProfileKey(PEER, profile)] =
+                    if (host.contains(':')) "[$host]:${write.port}" else host
+                prefs[getProfileKey(SERVER_PEER_PORT, profile)] = write.port
+                prefs[getProfileKey(CSQTT_LINK_MODE, profile)] = false
+                prefs.remove(getProfileKey(CSQTT_LINK, profile))
+
+                val localKey = getProfileKey(CONNECTION_PASSWORD_LOCAL, profile)
+                prefs[localKey] = write.password
+                prefs.remove(getProfileKey(CONNECTION_PASSWORD, profile))
+                prefs.remove(getProfileKey(CONNECTION_PASSWORD_ENCRYPTED, profile))
+
+                val power = write.power?.coerceIn(1, CsqttConstants.Tunnel.MAX_WORKERS)
+                val storedWorkers = prefs[getProfileKey(WORKERS_PER_HASH, profile)]
+                val targetWorkers = when {
+                    power == null -> storedWorkers ?: 10
+                    storedWorkers == null -> power
+                    else -> storedWorkers.coerceAtMost(power)
+                }
+                prefs[getProfileKey(WORKERS_PER_HASH, profile)] = WorkerCountPolicy.normalize(
+                    targetWorkers,
+                    maximum = power ?: CsqttConstants.Tunnel.MAX_WORKERS,
+                )
+
+                val title = write.title.trim()
+                val nodeName = write.nodeName.trim()
+                val previousNode = prefs[getProfileKey(SUBSCRIPTION_NODE, profile)].orEmpty()
+                val currentName = prefs[getProfileKey(PROFILE_NAME, profile)]
+                val defaultName = defaultProfileName(profile)
+                val renameAllowed = currentName.isNullOrBlank() ||
+                    currentName == defaultName ||
+                    currentName == previousNode
+                if (renameAllowed) {
+                    if (nodeName.isEmpty() || nodeName == defaultName) {
+                        prefs.remove(getProfileKey(PROFILE_NAME, profile))
+                    } else {
+                        prefs[getProfileKey(PROFILE_NAME, profile)] = nodeName
+                    }
+                }
+
+                prefs[getProfileKey(SUBSCRIPTION_URL, profile)] = write.url.trim()
+                if (title.isEmpty()) {
+                    prefs.remove(getProfileKey(SUBSCRIPTION_TITLE, profile))
+                } else {
+                    prefs[getProfileKey(SUBSCRIPTION_TITLE, profile)] = title
+                }
+                if (write.subUuid.isNullOrBlank()) {
+                    prefs.remove(getProfileKey(SUBSCRIPTION_UUID, profile))
+                } else {
+                    prefs[getProfileKey(SUBSCRIPTION_UUID, profile)] = write.subUuid
+                }
+                prefs[getProfileKey(SUBSCRIPTION_NODE, profile)] = nodeName
+                if (power == null) {
+                    prefs.remove(getProfileKey(SUBSCRIPTION_POWER, profile))
+                } else {
+                    prefs[getProfileKey(SUBSCRIPTION_POWER, profile)] = power
+                }
+
+                if (write.hashes.isNotEmpty()) {
+                    prefs[getProfileKey(VK_HASHES, profile)] = write.hashes.joinToString(",")
+                }
+            }
+        }
+    }
+
+    /** A profile slot is considered free when it has neither a peer nor a participant link. */
+    internal suspend fun findFirstFreeProfile(): Int? = dataStore.data.map { prefs ->
+        (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX).firstOrNull { p ->
+            val peer = prefs[getProfileKey(PEER, p)]
+            val link = prefs[getProfileKey(CSQTT_LINK, p)]
+            peer.isNullOrBlank() && link.isNullOrBlank()
+        }
+    }.first()
+
+    /** A slot is free for a new server only when it has no connection and no deploy IP. */
+    internal suspend fun findFirstFreeDeployProfile(): Int? = dataStore.data.map { prefs ->
+        (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX).firstOrNull { p ->
+            prefs[getProfileKey(PEER, p)].isNullOrBlank() &&
+                prefs[getProfileKey(CSQTT_LINK, p)].isNullOrBlank() &&
+                prefs[getProfileKey(DEPLOY_IP, p)].isNullOrBlank()
+        }
+    }.first()
+
+    /** Wipes every connection-related key of a profile slot, making it free again. */
+    suspend fun clearProfile(profile: Int) {
+        dataStore.edit { prefs ->
+            listOf(
+                PROFILE_NAME, PEER, SERVER_PEER_PORT, WORKERS_PER_HASH,
+                CONNECTION_PASSWORD, CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD_LOCAL,
+                CSQTT_LINK, CSQTT_LINK_MODE, SUBSCRIPTION_URL, SUBSCRIPTION_TITLE,
+                SUBSCRIPTION_UUID, SUBSCRIPTION_NODE, SUBSCRIPTION_POWER,
+            ).forEach { key -> prefs.remove(getProfileKey(key, profile)) }
+            val active = prefs[ACTIVE_PROFILE] ?: CsqttConstants.Profiles.MIN_INDEX
+            if (active == profile) {
+                val fallback = (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX)
+                    .firstOrNull { p ->
+                        p != profile && (
+                            !prefs[getProfileKey(PEER, p)].isNullOrBlank() ||
+                                !prefs[getProfileKey(CSQTT_LINK, p)].isNullOrBlank()
+                            )
+                    }
+                prefs[ACTIVE_PROFILE] = fallback ?: CsqttConstants.Profiles.MIN_INDEX
+            }
+        }
+    }
+
+    /** Wipes all profile slots associated with the given subscription URL. */
+    suspend fun clearSubscription(url: String) {
+        if (url.isBlank()) return
+        val currentPrefs = dataStore.data.first()
+        val targetSlots = (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX).filter { profile ->
+            currentPrefs[getProfileKey(SUBSCRIPTION_URL, profile)].orEmpty() == url
+        }
+        for (slot in targetSlots) {
+            clearProfile(slot)
+        }
+        deleteSubscriptionMeta(url)
+    }
+
+    internal suspend fun recordSubscriptionImport(
+        url: String,
+        title: String,
+        allowHttp: Boolean,
+    ) {
+        val key = url.trim()
+        if (key.isEmpty()) return
+        dataStore.edit { prefs ->
+            val meta = decodeSubscriptionMeta(prefs[SUBSCRIPTION_META]).toMutableMap()
+            val existing = meta[key]
+            meta[key] = SubscriptionMeta(
+                url = key,
+                title = existing?.title?.takeIf { it.isNotBlank() } ?: title.trim(),
+                autoUpdateMinutes = existing?.autoUpdateMinutes ?: 0,
+                lastUpdatedAt = existing?.lastUpdatedAt ?: 0L,
+                lastAttemptAt = existing?.lastAttemptAt ?: 0L,
+                allowHttp = allowHttp || existing?.allowHttp == true,
+            )
+            prefs[SUBSCRIPTION_META] = encodeSubscriptionMeta(meta)
+        }
+    }
+
+    internal suspend fun markSubscriptionAttempt(
+        url: String,
+        at: Long = System.currentTimeMillis(),
+    ) {
+        updateSubscriptionMeta(url) { meta ->
+            meta.copy(lastAttemptAt = at)
+        }
+    }
+
+    internal suspend fun markSubscriptionUpdated(
+        url: String,
+        title: String? = null,
+        at: Long = System.currentTimeMillis(),
+    ) {
+        updateSubscriptionMeta(url) { meta ->
+            val resolvedTitle = meta.title.takeIf { it.isNotBlank() }
+                ?: title?.trim().orEmpty()
+            meta.copy(
+                title = resolvedTitle,
+                lastUpdatedAt = at,
+                lastAttemptAt = at,
+            )
+        }
+    }
+
+    internal suspend fun saveSubscriptionAutoUpdate(url: String, minutes: Int) {
+        updateSubscriptionMeta(url) { meta ->
+            meta.copy(autoUpdateMinutes = minutes.coerceAtLeast(0))
+        }
+    }
+
+    internal suspend fun renameSubscription(url: String, oldTitle: String, newTitle: String) {
+        val key = url.trim()
+        val title = newTitle.trim()
+        if (key.isEmpty()) return
+        dataStore.edit { prefs ->
+            val meta = decodeSubscriptionMeta(prefs[SUBSCRIPTION_META]).toMutableMap()
+            val existing = meta[key] ?: SubscriptionMeta(url = key, title = oldTitle)
+            meta[key] = existing.copy(url = key, title = title)
+            prefs[SUBSCRIPTION_META] = encodeSubscriptionMeta(meta)
+
+            for (profile in CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX) {
+                if (prefs[getProfileKey(SUBSCRIPTION_URL, profile)].orEmpty() != key) continue
+                if (title.isEmpty()) {
+                    prefs.remove(getProfileKey(SUBSCRIPTION_TITLE, profile))
+                } else {
+                    prefs[getProfileKey(SUBSCRIPTION_TITLE, profile)] = title
+                }
+                val profileName = prefs[getProfileKey(PROFILE_NAME, profile)]
+                if (profileName == oldTitle) {
+                    if (title.isEmpty()) {
+                        prefs.remove(getProfileKey(PROFILE_NAME, profile))
+                    } else {
+                        prefs[getProfileKey(PROFILE_NAME, profile)] = title
+                    }
+                }
+            }
+        }
+    }
+
+    internal suspend fun changeSubscriptionUrl(oldUrl: String, newUrl: String) {
+        val from = oldUrl.trim()
+        val to = newUrl.trim()
+        if (from.isEmpty() || to.isEmpty() || from == to) return
+        dataStore.edit { prefs ->
+            val meta = decodeSubscriptionMeta(prefs[SUBSCRIPTION_META]).toMutableMap()
+            val moved = meta.remove(from) ?: SubscriptionMeta(url = to)
+            meta[to] = moved.copy(url = to)
+            prefs[SUBSCRIPTION_META] = encodeSubscriptionMeta(meta)
+
+            for (profile in CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX) {
+                if (prefs[getProfileKey(SUBSCRIPTION_URL, profile)].orEmpty() == from) {
+                    prefs[getProfileKey(SUBSCRIPTION_URL, profile)] = to
+                }
+            }
+        }
+    }
+
+    internal suspend fun deleteSubscriptionMeta(url: String) {
+        val key = url.trim()
+        if (key.isEmpty()) return
+        dataStore.edit { prefs ->
+            val meta = decodeSubscriptionMeta(prefs[SUBSCRIPTION_META]).toMutableMap()
+            if (meta.remove(key) != null) {
+                prefs[SUBSCRIPTION_META] = encodeSubscriptionMeta(meta)
+            }
+        }
+    }
+
+    private suspend fun updateSubscriptionMeta(
+        url: String,
+        transform: (SubscriptionMeta) -> SubscriptionMeta,
+    ) {
+        val key = url.trim()
+        if (key.isEmpty()) return
+        dataStore.edit { prefs ->
+            val meta = decodeSubscriptionMeta(prefs[SUBSCRIPTION_META]).toMutableMap()
+            meta[key] = transform(meta[key] ?: SubscriptionMeta(url = key))
+            prefs[SUBSCRIPTION_META] = encodeSubscriptionMeta(meta)
+        }
+    }
+
+    val extraWorkers: Flow<Boolean> = dataStore.data.map { prefs ->
+        val profile = prefs[ACTIVE_PROFILE] ?: 0
+        prefs[getProfileKey(EXTRA_WORKERS, profile)] ?: false
+    }
     val autoJsRiskAcknowledged: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[AUTO_JS_RISK_ACKNOWLEDGED] ?: false
     }
@@ -654,6 +1243,8 @@ class SettingsStore(context: Context) {
                 migrateConnectionPasswordsToLocalStorage()
                 migrateSecretsToKeystore()
                 migrateLegacyWhitelistMode()
+                migrateSubscriptionMeta()
+                migrateDeployServerNames()
             }
         }
         if (uiCacheStarted.compareAndSet(false, true)) {
@@ -690,6 +1281,7 @@ class SettingsStore(context: Context) {
                 launch { ipIsWhitelist.collect { cachedIpIsWhitelist = it } }
                 launch { directIpsBlack.collect { cachedDirectIpsBlack = it } }
                 launch { directIpsWhite.collect { cachedDirectIpsWhite = it } }
+                launch { deploySettingsSnapshot.collect { cachedDeploySnapshot = it } }
             }
         }
     }
@@ -947,6 +1539,13 @@ class SettingsStore(context: Context) {
         }
     }
 
+    suspend fun saveVkHashesOnly(vkHashes: String) {
+        dataStore.edit { prefs ->
+            val profile = prefs[ACTIVE_PROFILE] ?: 0
+            prefs[getProfileKey(VK_HASHES, profile)] = vkHashes
+        }
+    }
+
     suspend fun saveSshKeysMode(enabled: Boolean) {
         dataStore.edit { prefs ->
             val profile = prefs[ACTIVE_PROFILE] ?: 0
@@ -1000,6 +1599,56 @@ class SettingsStore(context: Context) {
         return newUuid
     }
 
+    /** Persists a panel secret path that has already been applied and verified on the server. */
+    suspend fun saveDeploySecretPathUuid(uuid: String) {
+        dataStore.edit { prefs ->
+            val profile = prefs[ACTIVE_PROFILE] ?: 0
+            prefs[getProfileKey(DEPLOY_SECRET_PATH_UUID, profile)] = uuid
+        }
+    }
+
+    /** Removes every stored deploy setting and secret for the active profile. */
+    suspend fun clearDeployProfile() {
+        val profile = activeProfile.first()
+        dataStore.edit { prefs ->
+            prefs.remove(getProfileKey(DEPLOY_IP, profile))
+            prefs.remove(getProfileKey(DEPLOY_SERVER_NAME, profile))
+            prefs.remove(getProfileKey(DEPLOY_LOGIN, profile))
+            prefs.remove(getProfileKey(DEPLOY_PASSWORD, profile))
+            prefs.remove(getProfileKey(DEPLOY_PASSWORD_ENCRYPTED, profile))
+            prefs.remove(getProfileKey(DEPLOY_MAIN_PASSWORD, profile))
+            prefs.remove(getProfileKey(DEPLOY_MAIN_PASSWORD_ENCRYPTED, profile))
+            prefs.remove(getProfileKey(DEPLOY_WEB_LOGIN, profile))
+            prefs.remove(getProfileKey(DEPLOY_WEB_PASSWORD, profile))
+            prefs.remove(getProfileKey(DEPLOY_WEB_PASSWORD_ENCRYPTED, profile))
+            prefs.remove(getProfileKey(DEPLOY_SSH_PORT, profile))
+            prefs.remove(getProfileKey(SERVER_PEER_PORT, profile))
+            prefs.remove(getProfileKey(SERVER_WEB_PORT, profile))
+            prefs.remove(getProfileKey(MANUAL_PORTS_ENABLED, profile))
+            prefs.remove(getProfileKey(SSH_KEYS_MODE, profile))
+            prefs.remove(getProfileKey(DOCKER_INSTALL, profile))
+            prefs.remove(getProfileKey(DEPLOY_SECRET_PATH_ENABLED, profile))
+            prefs.remove(getProfileKey(DEPLOY_SECRET_PATH_UUID, profile))
+            prefs.remove(getProfileKey(DEPLOY_SERVER_CONFIGURED, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_AT, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_OK, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_ARCH, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_SERVICE, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_VERSION, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_MESSAGE, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_PANEL, profile))
+            prefs.remove(getProfileKey(SSH_PRIVATE_KEY, profile))
+            prefs.remove(getProfileKey(SSH_PRIVATE_KEY_ENCRYPTED, profile))
+            prefs.remove(getProfileKey(SSH_KEY_PASSPHRASE, profile))
+            prefs.remove(getProfileKey(SSH_KEY_PASSPHRASE_ENCRYPTED, profile))
+            prefs.remove(getProfileKey(SSH_CERTIFICATE, profile))
+            prefs.remove(getProfileKey(SSH_CERTIFICATE_ENCRYPTED, profile))
+            prefs.remove(getProfileKey(CONNECTION_PASSWORD_LOCAL, profile))
+            prefs.remove(getProfileKey(CONNECTION_PASSWORD, profile))
+            prefs.remove(getProfileKey(CONNECTION_PASSWORD_ENCRYPTED, profile))
+        }
+    }
+
     suspend fun saveSshKeys(privateKey: String, keyPassphrase: String, certificate: String) {
         dataStore.edit { prefs ->
             val profile = prefs[ACTIVE_PROFILE] ?: 0
@@ -1026,10 +1675,74 @@ class SettingsStore(context: Context) {
         }
     }
 
+    suspend fun saveDeployServerName(name: String) {
+        val profile = activeProfile.first()
+        dataStore.edit { prefs ->
+            val trimmed = name.trim()
+            if (trimmed.isEmpty()) {
+                prefs.remove(getProfileKey(DEPLOY_SERVER_NAME, profile))
+            } else {
+                prefs[getProfileKey(DEPLOY_SERVER_NAME, profile)] = trimmed
+            }
+        }
+    }
+
     suspend fun saveDeploy(ip: String) {
         val profile = activeProfile.first()
         dataStore.edit { prefs ->
+            val previous = prefs[getProfileKey(DEPLOY_IP, profile)]
             prefs[getProfileKey(DEPLOY_IP, profile)] = ip
+            if (previous != ip) {
+                prefs[getProfileKey(DEPLOY_SERVER_CONFIGURED, profile)] = false
+                prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_AT, profile))
+                prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_OK, profile))
+                prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_ARCH, profile))
+                prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_SERVICE, profile))
+                prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_VERSION, profile))
+                prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_MESSAGE, profile))
+                prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_PANEL, profile))
+            }
+        }
+    }
+
+    suspend fun saveServerConfigured(configured: Boolean) {
+        val profile = activeProfile.first()
+        dataStore.edit { prefs ->
+            prefs[getProfileKey(DEPLOY_SERVER_CONFIGURED, profile)] = configured
+        }
+    }
+
+    /** Persists the last successful server inspection so the deploy screen remembers it after restart. */
+    suspend fun saveDeployInspection(
+        checkedAtMs: Long,
+        arch: String,
+        serviceStatus: String,
+        installedVersion: String,
+        message: String,
+        panelAvailable: Boolean,
+    ) {
+        dataStore.edit { prefs ->
+            val profile = prefs[ACTIVE_PROFILE] ?: 0
+            prefs[getProfileKey(DEPLOY_LAST_INSPECTION_AT, profile)] = checkedAtMs
+            prefs[getProfileKey(DEPLOY_LAST_INSPECTION_OK, profile)] = true
+            prefs[getProfileKey(DEPLOY_LAST_INSPECTION_ARCH, profile)] = arch
+            prefs[getProfileKey(DEPLOY_LAST_INSPECTION_SERVICE, profile)] = serviceStatus
+            prefs[getProfileKey(DEPLOY_LAST_INSPECTION_VERSION, profile)] = installedVersion
+            prefs[getProfileKey(DEPLOY_LAST_INSPECTION_MESSAGE, profile)] = message
+            prefs[getProfileKey(DEPLOY_LAST_INSPECTION_PANEL, profile)] = panelAvailable
+        }
+    }
+
+    suspend fun clearDeployInspection() {
+        dataStore.edit { prefs ->
+            val profile = prefs[ACTIVE_PROFILE] ?: 0
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_AT, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_OK, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_ARCH, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_SERVICE, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_VERSION, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_MESSAGE, profile))
+            prefs.remove(getProfileKey(DEPLOY_LAST_INSPECTION_PANEL, profile))
         }
     }
 
@@ -1196,10 +1909,17 @@ class SettingsStore(context: Context) {
         }
     }
 
-    suspend fun saveExtraWorkers(enabled: Boolean = false) {
+    suspend fun saveExtraWorkers(enabled: Boolean) {
         dataStore.edit { prefs ->
-            for (p in CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX) {
-                prefs[getProfileKey(EXTRA_WORKERS, p)] = false
+            val profile = prefs[ACTIVE_PROFILE] ?: 0
+            prefs[getProfileKey(EXTRA_WORKERS, profile)] = enabled
+            if (!enabled) {
+                val current = prefs[getProfileKey(WORKERS_PER_HASH, profile)] ?: 18
+                val maximum = WorkerCountPolicy.defaultMaximum(extraWorkers = false)
+                if (current > maximum) {
+                    prefs[getProfileKey(WORKERS_PER_HASH, profile)] =
+                        WorkerCountPolicy.normalize(current, maximum = maximum)
+                }
             }
         }
     }
@@ -1381,6 +2101,53 @@ class SettingsStore(context: Context) {
         dataStore.edit { prefs ->
             val profile = prefs[ACTIVE_PROFILE] ?: 0
             prefs[getProfileKey(DIRECT_IPS_WHITE, profile)] = ips
+        }
+    }
+
+    private suspend fun migrateSubscriptionMeta() {
+        dataStore.edit { prefs ->
+            val meta = decodeSubscriptionMeta(prefs[SUBSCRIPTION_META]).toMutableMap()
+            var changed = false
+            for (profile in CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX) {
+                val url = prefs[getProfileKey(SUBSCRIPTION_URL, profile)]?.trim().orEmpty()
+                if (url.isEmpty() || meta.containsKey(url)) continue
+                meta[url] = SubscriptionMeta(
+                    url = url,
+                    title = prefs[getProfileKey(SUBSCRIPTION_TITLE, profile)]?.trim().orEmpty(),
+                )
+                changed = true
+            }
+            if (changed) {
+                prefs[SUBSCRIPTION_META] = encodeSubscriptionMeta(meta)
+            }
+        }
+    }
+
+    /**
+     * Server names used to be stored in the shared connection profile name, which made
+     * deploy-only profiles show up as named owner profiles. Move that name to its own
+     * deploy key and clear the connection profile name for server-only slots.
+     */
+    private suspend fun migrateDeployServerNames() {
+        val current = dataStore.data.first()
+        if (current[DEPLOY_PROFILE_NAMES_CLEANED] == true) return
+        dataStore.edit { prefs ->
+            for (profile in CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX) {
+                val ip = prefs[getProfileKey(DEPLOY_IP, profile)]?.trim().orEmpty()
+                if (ip.isEmpty()) continue
+                val profileName = prefs[getProfileKey(PROFILE_NAME, profile)]?.trim().orEmpty()
+                if (profileName.isNotEmpty() &&
+                    prefs[getProfileKey(DEPLOY_SERVER_NAME, profile)].isNullOrBlank()
+                ) {
+                    prefs[getProfileKey(DEPLOY_SERVER_NAME, profile)] = profileName
+                }
+                val hasConnection = !prefs[getProfileKey(PEER, profile)].isNullOrBlank() ||
+                    !prefs[getProfileKey(CSQTT_LINK, profile)].isNullOrBlank()
+                if (!hasConnection) {
+                    prefs.remove(getProfileKey(PROFILE_NAME, profile))
+                }
+            }
+            prefs[DEPLOY_PROFILE_NAMES_CLEANED] = true
         }
     }
 

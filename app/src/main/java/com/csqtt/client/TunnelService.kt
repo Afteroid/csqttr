@@ -182,7 +182,8 @@ class TunnelService : Service() {
                             else -> requestedVkAuthMode
                         }
                         val accountAutoJs = vkAuthMode == CsqttConstants.VkAuth.MODE_AUTO_JS
-                        val maxWorkers = CsqttConstants.Tunnel.MAX_WORKERS
+                        val extraWorkers = !accountAutoJs && store.extraWorkers.first()
+                        val maxWorkers = WorkerCountPolicy.defaultMaximum(extraWorkers)
                         val workersPerHash = WorkerCountPolicy.normalize(requestedWorkers, maximum = maxWorkers)
                         TunnelManager.isLoggingEnabled = store.loggingEnabled.first()
                         if (accountAutoJs) {
@@ -410,7 +411,6 @@ class TunnelService : Service() {
                 val genId = store.reserveConnectionGeneration()
                 val salt = newTunnelSessionId()
                 val requestedVkAuthMode = sanitizeVkAuthMode(store.vkAuthMode.first())
-                val workersPerHash = WorkerCountPolicy.normalize(store.workersPerHash.first())
                 TunnelManager.isLoggingEnabled = store.loggingEnabled.first()
                 val configuredHashMode = store.vkHashMode.first()
                 val vkAuthMode = when {
@@ -425,6 +425,12 @@ class TunnelService : Service() {
                     else -> requestedVkAuthMode
                 }
                 val accountAutoJs = vkAuthMode == CsqttConstants.VkAuth.MODE_AUTO_JS
+                val workersPerHash = WorkerCountPolicy.normalize(
+                    store.workersPerHash.first(),
+                    maximum = WorkerCountPolicy.defaultMaximum(
+                        extraWorkers = !accountAutoJs && store.extraWorkers.first(),
+                    ),
+                )
                 if (!awaitVkNetwork()) {
                     TunnelManager.starting.value = false
                     return@launch
@@ -583,7 +589,9 @@ class TunnelService : Service() {
                     (source.tokenFromLink && vkHashMode == CsqttConstants.VkAutoHash.MODE_AUTO_JS)
                 val workers = WorkerCountPolicy.normalize(
                     store.workersPerHash.first(),
-                    maximum = CsqttConstants.Tunnel.MAX_WORKERS,
+                    maximum = WorkerCountPolicy.defaultMaximum(
+                        extraWorkers = !accountAutoJs && store.extraWorkers.first(),
+                    ),
                 )
                 val resolved = when {
                     accountAutoJs -> resolveAutoHashes(
