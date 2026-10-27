@@ -130,3 +130,21 @@ fun CsqttV2Theme(
         )
     }
 }
+
+/**
+ * V2's colours and Material theme without touching the window's bars — for a V2 sheet shown inside the classic design
+ * (CsqttV2Theme recolours the status and navigation bars and leaves them so).
+ */
+@Composable
+fun CsqttV2Colors(darkTheme: Boolean, content: @Composable () -> Unit) {
+    val colors = if (darkTheme) v2DarkColorsForPalette("nordic_slate") else V2LightColors
+    val colorScheme = remember(darkTheme) { v2ColorScheme(colors, darkTheme) }
+    CompositionLocalProvider(LocalV2Colors provides colors) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = V2Typography,
+            shapes = V2MaterialShapes,
+            content = content,
+        )
+    }
+}
