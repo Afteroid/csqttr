@@ -19,6 +19,25 @@ class WorkerCountPolicyTest {
     }
 
     @Test
+    fun extraWorkersRaiseTheDefaultMaximum() {
+        assertEquals(
+            CsqttConstants.Tunnel.DEFAULT_MAX_WORKERS,
+            WorkerCountPolicy.defaultMaximum(extraWorkers = false),
+        )
+        assertEquals(
+            CsqttConstants.Tunnel.MAX_WORKERS,
+            WorkerCountPolicy.defaultMaximum(extraWorkers = true),
+        )
+        assertEquals(
+            CsqttConstants.Tunnel.DEFAULT_MAX_WORKERS,
+            WorkerCountPolicy.normalize(
+                Int.MAX_VALUE,
+                maximum = WorkerCountPolicy.defaultMaximum(extraWorkers = false),
+            ),
+        )
+    }
+
+    @Test
     fun hashCapacityHasNoHiddenExtraWorkers() {
         assertEquals(10, WorkerCountPolicy.maximumForHashes(1))
         assertEquals(20, WorkerCountPolicy.maximumForHashes(2))

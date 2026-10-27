@@ -1,4 +1,4 @@
-package com.csqtt.client.ui
+package com.csqtt.client.ui.legacy
 
 import org.junit.Assert.assertNotNull
 import org.junit.Test

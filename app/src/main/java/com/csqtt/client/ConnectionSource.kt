@@ -1,7 +1,7 @@
 package com.csqtt.client
 
-import com.csqtt.client.ui.utils.parseCsqttLink
-import com.csqtt.client.ui.utils.peerAddress
+import com.csqtt.client.ui.legacy.utils.parseCsqttLink
+import com.csqtt.client.ui.legacy.utils.peerAddress
 import kotlinx.coroutines.flow.first
 
 data class ConnectionSource(
@@ -39,11 +39,8 @@ suspend fun resolveConnectionSource(store: SettingsStore): ConnectionSource? {
     val passwordState = store.connectionPasswordState.first()
     val password = passwordState.value
     if (basePeer.isBlank()) return null
-    val serverPeerPort = if (store.manualPortsEnabled.first()) {
-        store.serverPeerPort.first()
-    } else {
-        CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT
-    }
+    val serverPeerPort = store.serverPeerPort.first().takeIf { it in 1..65535 }
+        ?: CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT
     val peer = if (basePeer.contains(':')) basePeer else "$basePeer:$serverPeerPort"
     return ConnectionSource(
         peer = peer,

@@ -64,20 +64,22 @@ import androidx.lifecycle.lifecycleScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import com.csqtt.client.ui.AppUpdateDialog
-import com.csqtt.client.ui.ConnectionTab
-import com.csqtt.client.ui.ExceptionsTab
-import com.csqtt.client.ui.FloatingToolbar
-import com.csqtt.client.ui.LogsTab
-import com.csqtt.client.ui.SettingsTab
+import com.csqtt.client.ui.v2.dialogs.V2AppUpdateDialog as AppUpdateDialog
+import com.csqtt.client.ui.legacy.ConnectionTab
+import com.csqtt.client.ui.legacy.ExceptionsTab
+import com.csqtt.client.ui.legacy.FloatingToolbar
+import com.csqtt.client.ui.legacy.LogsTab
+import com.csqtt.client.ui.legacy.SettingsTab
 import com.csqtt.client.CsqttConstants
-import com.csqtt.client.ui.DeployTab
-import com.csqtt.client.ui.InfoTab
-import com.csqtt.client.ui.components.LocalCsqttHeaderActions
-import com.csqtt.client.ui.design.CsqttMotion
-import com.csqtt.client.ui.design.CsqttShapes
-import com.csqtt.client.ui.dialogs.VkAuthDialog
-import com.csqtt.client.ui.utils.parseCsqttLink
+import com.csqtt.client.ui.legacy.DeployTab
+import com.csqtt.client.ui.legacy.InfoTab
+import com.csqtt.client.ui.legacy.components.LocalCsqttHeaderActions
+import com.csqtt.client.ui.legacy.design.CsqttMotion
+import com.csqtt.client.ui.legacy.design.CsqttShapes
+import com.csqtt.client.ui.v2.dialogs.V2VkAuthDialog as VkAuthDialog
+import com.csqtt.client.ui.legacy.utils.parseCsqttLink
+import com.csqtt.client.ui.v2.CsqttV2Config
+import com.csqtt.client.ui.v2.navigation.CsqttV2Root
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
@@ -87,6 +89,7 @@ class MainActivity : ComponentActivity() {
     private val appSettingsStore by lazy { SettingsStore(applicationContext) }
     private var renderUi by mutableStateOf(false)
     private var showVkAuthDialog by mutableStateOf(false)
+    private var pendingDeepLink by mutableStateOf<String?>(null)
     private var batteryPromptInFlight = false
 
     private val batteryLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -132,6 +135,8 @@ class MainActivity : ComponentActivity() {
 
         checkAndRequestNotifications()
 
+        com.csqtt.client.ui.v2.screens.settings.preloadAvatars(this)
+
         setContent {
             val authContext = LocalContext.current.applicationContext
             val authScope = rememberCoroutineScope()
@@ -139,6 +144,12 @@ class MainActivity : ComponentActivity() {
             if (renderUi) {
                 uiStateHolder.SaveableStateProvider("main_ui") {
             val settingsStore = remember { appSettingsStore }
+            if (CsqttV2Config.ENABLED) {
+                CsqttV2Root(
+                    settingsStore = settingsStore,
+                    onVkAuthRequested = { showVkAuthDialog = true },
+                )
+            } else {
             val themeMode by settingsStore.themeMode.collectAsStateWithLifecycle(initialValue = CsqttConstants.Theme.MODE_SYSTEM)
             val activeFingerprint by settingsStore.selectedFingerprint.collectAsStateWithLifecycle(initialValue = CsqttConstants.Tunnel.DEFAULT_FINGERPRINT)
             val scope = rememberCoroutineScope()
@@ -169,6 +180,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             }
+            }
                 }
             }
             if (showVkAuthDialog) {
@@ -181,6 +193,18 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onDismiss = { showVkAuthDialog = false },
+                )
+            }
+            val pendingLink = pendingDeepLink
+            if (pendingLink != null) {
+                com.csqtt.client.ui.v2.dialogs.V2BrowserImportDialog(
+                    rawLink = pendingLink,
+                    settingsStore = remember { appSettingsStore },
+                    onDismiss = { pendingDeepLink = null },
+                    onImported = { _, name ->
+                        pendingDeepLink = null
+                        showRaisedToast("Профиль «$name» успешно импортирован", Toast.LENGTH_SHORT)
+                    },
                 )
             }
         }
@@ -200,17 +224,7 @@ class MainActivity : ComponentActivity() {
             showRaisedToast("Неверная ссылка CSQTT", Toast.LENGTH_SHORT)
             return
         }
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Импорт конфигурации CSQTT")
-            .setMessage("Хост: ${link.host}\nPeer: ${link.port}\n\nЗаменить текущую конфигурацию?")
-            .setPositiveButton("Импортировать") { _, _ ->
-                lifecycleScope.launch {
-                    appSettingsStore.saveCsqttParticipantLink(raw)
-                    showRaisedToast("Конфигурация CSQTT успешно подключена", Toast.LENGTH_SHORT)
-                }
-            }
-            .setNegativeButton("Отмена", null)
-            .show()
+        pendingDeepLink = raw
     }
 
     private fun checkAndRequestNotifications() {

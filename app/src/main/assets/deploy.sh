@@ -104,6 +104,7 @@ fi
 
 SYSTEMD_NEEDS_RELOAD=0
 DEPLOY_PHASE="initial"
+PRESERVE_CONFIG=0
 DOCKER_CONTEXT_DIR=""
 CSQTT_DOCKER_CANDIDATE_IMAGE=""
 
@@ -988,6 +989,21 @@ validate_candidate_environment() {
 
 prepare_uploaded_release() {
     DEPLOY_PHASE="preflight"
+    if [ "$PRESERVE_CONFIG" = "1" ]; then
+        if [ ! -s "$UPLOAD_ENV_FILE" ]; then
+            if [ ! -s "$CSQTT_ENV_FILE" ]; then
+                die "Не найдена существующая WEB-конфигурация ${CSQTT_ENV_FILE}; выполните первый деплой" "$EXIT_PREFLIGHT_FAILED"
+            fi
+            install -m 0600 "$CSQTT_ENV_FILE" "$UPLOAD_ENV_FILE" || die "Не удалось прочитать существующую WEB-конфигурацию" "$EXIT_PREFLIGHT_FAILED"
+        fi
+        if [ ! -s "$UPLOAD_OVERRIDES_FILE" ]; then
+            if [ ! -s "$CSQTT_DEPLOY_OVERRIDES_FILE" ]; then
+                die "Не найдена существующая deploy-конфигурация ${CSQTT_DEPLOY_OVERRIDES_FILE}; выполните первый деплой" "$EXIT_PREFLIGHT_FAILED"
+            fi
+            install -m 0600 "$CSQTT_DEPLOY_OVERRIDES_FILE" "$UPLOAD_OVERRIDES_FILE" || die "Не удалось прочитать существующую deploy-конфигурацию" "$EXIT_PREFLIGHT_FAILED"
+        fi
+        log_info "Режим обновления: логин, пароли и путь панели сохраняются"
+    fi
     [ -f "$UPLOAD_BINARY" ] && [ -s "$UPLOAD_BINARY" ] || \
         die "Новый бинарник не загружен или пуст" "$EXIT_PREFLIGHT_FAILED"
     [ -f "$UPLOAD_ENV_FILE" ] && [ -s "$UPLOAD_ENV_FILE" ] || \
@@ -3029,13 +3045,25 @@ main() {
     echo "=== CSQTT Installer v${SCRIPT_VERSION} — $(date) ===" >> "$LOG_FILE"
 
     case "$action" in
+        update|--update|-up) PRESERVE_CONFIG=1 ;;
+    esac
+
+    case "$action" in
         status|--status|-s)       do_status ;;
         uninstall|--uninstall|-u)
             DEPLOY_PHASE="validation"
             validate_port "CSQTT_PEER_PORT" "$PEER_PORT"
             do_uninstall
             ;;
-        install|--install|-i)
+        purge|--purge|-p)
+            DEPLOY_PHASE="validation"
+            validate_port "CSQTT_PEER_PORT" "$PEER_PORT"
+            do_uninstall
+            rm -rf -- "$CSQTT_CONFIG_DIR"
+            log_info "Конфигурация, SQLite-база и сертификаты CSQTT удалены"
+            echo "CSQTT_PURGE_OK"
+            ;;
+        install|--install|-i|update|--update|-up)
             DEPLOY_PHASE="validation"
             case "$DEPLOY_MODE" in
                 systemd|docker) ;;
@@ -3068,6 +3096,9 @@ main() {
             detect_firewall
             run_timed "NAT/firewall" setup_nat_and_firewall
             install_network_helper
+            if [ "$PRESERVE_CONFIG" = "1" ]; then
+                log_info "Режим обновления: логин, пароли и путь панели сохраняются без изменений"
+            fi
             setup_csqtt_environment
             run_timed "Let’s Encrypt" setup_letsencrypt_ip_tls
             DEPLOY_PHASE="activation"
