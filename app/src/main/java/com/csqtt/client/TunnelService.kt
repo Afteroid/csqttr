@@ -10,6 +10,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.BatteryManager
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -33,6 +34,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
@@ -107,6 +109,20 @@ class TunnelService : Service() {
     private var autoPauseRequested = false
     @Volatile
     private var autoPausedForWifi = false
+    // «Экономия батареи»: the setting, and the charge as the sticky battery broadcast last said (main thread)
+    @Volatile
+    private var batterySaverMode = BatterySaver.DEFAULT_MODE
+    // nothing is decided before the stored mode is read: the sticky battery broadcast arrives at once, and the default
+    // («Авто») could let go of the locks for a moment under a user's «Выкл»
+    @Volatile
+    private var batterySaverLoaded = false
+    @Volatile
+    private var batterySaverPercent = BatterySaver.DEFAULT_PERCENT
+    private var batteryLevel = -1
+    private var batteryCharging = false
+    private var systemPowerSave = false
+    private var batteryReceiver: BroadcastReceiver? = null
+    private var batterySaverJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -119,6 +135,7 @@ class TunnelService : Service() {
         registerPhysicalNetworkCallback()
         observeAutoPauseOnWifi()
         observeDomainRoutingSettings()
+        observeBatterySaver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -1025,6 +1042,85 @@ class TunnelService : Service() {
         }
     }
 
+    /**
+     * «Экономия батареи»: in force («Авто» — the phone's battery saver is on; «Свой уровень» — at or below the chosen
+     * charge and not charging), the service lets go of its wake lock and TunVpnService of its own; out of force again,
+     * they are taken back while the tunnel runs. The charge and the phone's saver come from their broadcasts, which
+     * arrive only while the CPU is awake anyway.
+     */
+    private fun observeBatterySaver() {
+        val powerManager = getSystemService(PowerManager::class.java)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == PowerManager.ACTION_POWER_SAVE_MODE_CHANGED) {
+                    systemPowerSave = powerManager?.isPowerSaveMode == true
+                } else {
+                    readBattery(intent)
+                }
+                reconcileBatterySaver()
+            }
+        }
+        systemPowerSave = powerManager?.isPowerSaveMode == true
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                receiver,
+                IntentFilter(Intent.ACTION_BATTERY_CHANGED).apply {
+                    addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+                },
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }.onSuccess { sticky ->
+            batteryReceiver = receiver
+            sticky?.let(::readBattery)
+        }
+        batterySaverJob?.cancel()
+        batterySaverJob = serviceScope.launch {
+            val store = SettingsStore(applicationContext)
+            combine(store.batterySaverMode, store.batterySaverPercent) { mode, percent -> mode to percent }
+                .collect { (mode, percent) ->
+                    batterySaverMode = mode
+                    batterySaverPercent = percent
+                    batterySaverLoaded = true
+                    withContext(Dispatchers.Main) { reconcileBatterySaver() }
+                }
+        }
+    }
+
+    private fun readBattery(intent: Intent) {
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        batteryLevel = if (level >= 0 && scale > 0) level * 100 / scale else -1
+        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        batteryCharging = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0 ||
+            status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+    }
+
+    private fun reconcileBatterySaver() {
+        if (!batterySaverLoaded) return
+        val save = BatterySaver.shouldSave(
+            batterySaverMode, batterySaverPercent, batteryLevel, batteryCharging, systemPowerSave,
+        )
+        if (save == BatterySaver.active.value) return
+        BatterySaver.setActive(save)
+        if (save) {
+            if (!DeployManager.isDeploying.value) releaseWakeLock()
+            TunnelManager.updateLog(
+                "battery_saver",
+                if (batterySaverMode == BatterySaver.MODE_AUTO) {
+                    "[BAT] Экономия батареи: включено энергосбережение телефона — при выключенном экране туннель может засыпать"
+                } else {
+                    "[BAT] Экономия батареи: заряд $batteryLevel % — при выключенном экране туннель может засыпать"
+                },
+                2,
+            )
+        } else {
+            if (TunnelManager.running.value && !autoPausedForWifi) acquireWakeLock()
+            TunnelManager.updateLog("battery_saver", "[BAT] Экономия батареи выключена — туннель снова не засыпает", 2)
+        }
+        TunVpnService.instance?.onBatterySaverChanged(save)
+    }
+
     private fun observeDomainRoutingSettings() {
         domainRoutingSettingsJob?.cancel()
         domainRoutingSettingsJob = serviceScope.launch {
@@ -1219,6 +1315,11 @@ class TunnelService : Service() {
     }
 
     private fun acquireWakeLock() {
+        // «Экономия батареи» in force: the CPU may sleep, the tunnel with it — except for a deploy, which needs it awake
+        if (BatterySaver.active.value && !DeployManager.isDeploying.value) {
+            releaseWakeLock() // one a deploy or a server check took meanwhile
+            return
+        }
         val now = SystemClock.elapsedRealtime()
         if (wakeLock?.isHeld == true && now < wakeLockExpiresAtElapsedMs - WAKE_LOCK_RENEWAL_WINDOW_MS) return
         if (wakeLock?.isHeld == true) wakeLock?.release()
@@ -1414,6 +1515,11 @@ class TunnelService : Service() {
         autoPauseSettingsJob = null
         domainRoutingSettingsJob?.cancel()
         domainRoutingSettingsJob = null
+        batterySaverJob?.cancel()
+        batterySaverJob = null
+        batteryReceiver?.let { receiver -> runCatching { unregisterReceiver(receiver) } }
+        batteryReceiver = null
+        BatterySaver.setActive(false)
         stopWifiAutoPauseWatch()
         updateJob?.cancel()
         networkSwapJob?.cancel()
