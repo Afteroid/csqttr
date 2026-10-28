@@ -209,6 +209,7 @@ class SettingsStore(context: Context) {
         private val DEPLOY_IP = stringPreferencesKey("deploy_ip")
         private val DEPLOY_SERVER_NAME = stringPreferencesKey("deploy_server_name")
         private val DEPLOY_PROFILE_NAMES_CLEANED = booleanPreferencesKey("deploy_profile_names_cleaned_v2")
+        private val DEFAULT_ROLE_DECIDED = booleanPreferencesKey("default_role_decided")
         private val DEPLOY_LOGIN = stringPreferencesKey("deploy_login")
         private val DEPLOY_PASSWORD = stringPreferencesKey("deploy_password")
         private val DEPLOY_PASSWORD_ENCRYPTED = stringPreferencesKey("deploy_password_encrypted")
@@ -287,6 +288,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         private val THEME_MODE = stringPreferencesKey("theme_mode") 
         private val IS_DYNAMIC_COLOR = booleanPreferencesKey("is_dynamic_color")
         private val THEME_PALETTE = stringPreferencesKey("theme_palette")
+        private val UI_DESIGN = stringPreferencesKey("ui_design")
 
         private val SELECTED_FINGERPRINT = stringPreferencesKey("selected_fingerprint")
         private val ACTIVE_CLIENT_IDS = stringPreferencesKey("active_client_ids")
@@ -446,16 +448,21 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         val profile = prefs[ACTIVE_PROFILE] ?: 0
         prefs[getProfileKey(SECONDARY_VK_HASH, profile)] ?: ""
     }
-    val workersPerHash: Flow<Int> = dataStore.data.map { prefs ->
+    /** The most workers the active profile may use: «Экстра потоки» lifts 70 to 100, a subscription can lower it. */
+    private fun workersMaximum(prefs: Preferences): Int {
         val profile = prefs[ACTIVE_PROFILE] ?: 0
         val isExtra = prefs[getProfileKey(EXTRA_WORKERS, profile)] ?: false
         val defaultMax = WorkerCountPolicy.defaultMaximum(isExtra)
-        val max = prefs[getProfileKey(SUBSCRIPTION_POWER, profile)]
+        return prefs[getProfileKey(SUBSCRIPTION_POWER, profile)]
             ?.takeIf { it in 10..100 }
             ?.coerceAtMost(defaultMax)
             ?: defaultMax
+    }
+    val workersMaximum: Flow<Int> = dataStore.data.map { prefs -> workersMaximum(prefs) }
+    val workersPerHash: Flow<Int> = dataStore.data.map { prefs ->
+        val profile = prefs[ACTIVE_PROFILE] ?: 0
         val current = prefs[getProfileKey(WORKERS_PER_HASH, profile)] ?: 18
-        WorkerCountPolicy.normalize(current, maximum = max)
+        WorkerCountPolicy.normalize(current, maximum = workersMaximum(prefs))
     }
     val protocol: Flow<String> = dataStore.data.map { prefs ->
         val profile = prefs[ACTIVE_PROFILE] ?: 0
@@ -873,9 +880,10 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
      * VK hashes or token, worker limit and name. Participant mode is disabled and the raw link
      * plus subscription metadata are removed so the profile connects as a regular owner profile.
      */
-    internal suspend fun saveImportedConnection(profile: Int, imported: ImportedConnectionSettings) {
+    /** False, and nothing written, without a host, a valid port or a tunnel password. */
+    internal suspend fun saveImportedConnection(profile: Int, imported: ImportedConnectionSettings): Boolean {
         val host = imported.host.trim().removePrefix("[").removeSuffix("]")
-        if (host.isEmpty() || imported.port !in 1..65535 || imported.password.isBlank()) return
+        if (host.isEmpty() || imported.port !in 1..65535 || imported.password.isBlank()) return false
         dataStore.edit { prefs ->
             prefs[getProfileKey(PEER, profile)] =
                 if (host.contains(':')) "[$host]:${imported.port}" else host
@@ -924,6 +932,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 prefs[getProfileKey(PROFILE_NAME, profile)] = name
             }
         }
+        return true
     }
 
     suspend fun saveProfileWorkersPerHash(profile: Int, workersPerHash: Int) {
@@ -1206,6 +1215,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
     val themeMode: Flow<String> = dataStore.data.map { it[THEME_MODE] ?: "system" }
     val isDynamicColor: Flow<Boolean> = dataStore.data.map { it[IS_DYNAMIC_COLOR] ?: false }
     val themePalette: Flow<String> = dataStore.data.map { it[THEME_PALETTE] ?: "indigo" }
+    val uiDesign: Flow<String> = dataStore.data.map { it[UI_DESIGN] ?: CsqttConstants.Theme.DESIGN_CLASSIC }
 
     val selectedFingerprint: Flow<String> = dataStore.data.map { prefs ->
         val profile = prefs[ACTIVE_PROFILE] ?: 0
@@ -1240,6 +1250,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
     init {
         if (migrationsStarted.compareAndSet(false, true)) {
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                migrateDefaultRole()
                 migrateConnectionPasswordsToLocalStorage()
                 migrateSecretsToKeystore()
                 migrateLegacyWhitelistMode()
@@ -1295,6 +1306,12 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
     suspend fun saveThemeMode(mode: String) {
         dataStore.edit { prefs ->
             prefs[THEME_MODE] = mode
+        }
+    }
+
+    suspend fun saveUiDesign(design: String) {
+        dataStore.edit { prefs ->
+            prefs[UI_DESIGN] = design
         }
     }
 
@@ -2128,6 +2145,27 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
      * deploy-only profiles show up as named owner profiles. Move that name to its own
      * deploy key and clear the connection profile name for server-only slots.
      */
+    /**
+     * A fresh install starts as «Участник»: most people get a link or a QR code, not a server. Decided once, by what is
+     * stored rather than by what was written first (other startup code writes settings at the same time): an install
+     * that holds a connection, a link, a subscription, hashes, a deployed server or a chosen role keeps its role.
+     */
+    private suspend fun migrateDefaultRole() {
+        dataStore.edit { prefs ->
+            if (prefs[DEFAULT_ROLE_DECIDED] == true) return@edit
+            prefs[DEFAULT_ROLE_DECIDED] = true
+            val configured = (CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX).any { profile ->
+                listOf(PEER, CSQTT_LINK, SUBSCRIPTION_URL, VK_HASHES, DEPLOY_IP, CONNECTION_PASSWORD,
+                    CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD_LOCAL)
+                    .any { !prefs[getProfileKey(it, profile)].isNullOrBlank() } ||
+                    prefs[getProfileKey(CSQTT_LINK_MODE, profile)] != null
+            }
+            if (!configured) {
+                prefs[getProfileKey(CSQTT_LINK_MODE, prefs[ACTIVE_PROFILE] ?: 0)] = true
+            }
+        }
+    }
+
     private suspend fun migrateDeployServerNames() {
         val current = dataStore.data.first()
         if (current[DEPLOY_PROFILE_NAMES_CLEANED] == true) return
