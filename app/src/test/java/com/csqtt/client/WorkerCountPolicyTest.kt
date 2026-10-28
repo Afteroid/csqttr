@@ -7,7 +7,7 @@ import org.junit.Test
 class WorkerCountPolicyTest {
 
     @Test
-    fun everySupportedTotalRemainsAnExactMultipleOfFive() {
+    fun everySupportedTotalRemainsAnExactMultipleOfTen() {
         val supported = (1..CsqttConstants.Tunnel.MAX_WORKERS / CsqttConstants.Tunnel.WORKERS_PER_GROUP)
             .map { it * CsqttConstants.Tunnel.WORKERS_PER_GROUP }
         for ((groups, workers) in supported.withIndex()) {
@@ -83,9 +83,9 @@ class WorkerCountPolicyTest {
     fun invalidPersistedCountsAreBoundedAndNeverCreatePartialCredentialGroup() {
         for (requested in -1_000..1_000) {
             val normalized = WorkerCountPolicy.normalize(requested)
-            assertTrue(normalized in 5..CsqttConstants.Tunnel.MAX_WORKERS)
-            assertEquals(0, normalized % 5)
-            assertTrue(normalized <= requested.coerceAtLeast(5) || normalized == 100)
+            assertTrue(normalized in 10..CsqttConstants.Tunnel.MAX_WORKERS)
+            assertEquals(0, normalized % 10)
+            assertTrue(normalized <= requested.coerceAtLeast(10) || normalized == 100)
         }
     }
 
@@ -104,8 +104,8 @@ class WorkerCountPolicyTest {
     fun automaticHashModeAllowsTheFullWorkerRange() {
         for (requested in -100..300) {
             val admitted = WorkerCountPolicy.normalize(requested)
-            assertTrue(admitted in 5..CsqttConstants.Tunnel.MAX_WORKERS)
-            assertEquals(0, admitted % 5)
+            assertTrue(admitted in 10..CsqttConstants.Tunnel.MAX_WORKERS)
+            assertEquals(0, admitted % 10)
         }
         assertEquals(100, WorkerCountPolicy.normalize(Int.MAX_VALUE))
     }
@@ -115,8 +115,8 @@ class WorkerCountPolicyTest {
         for (requested in listOf(Int.MIN_VALUE, -1, 0, 4, 28, 109, Int.MAX_VALUE)) {
             for (hashCount in 1..CsqttConstants.Tunnel.MAX_VK_HASHES) {
                 val admitted = WorkerCountPolicy.normalizeForHashes(requested, hashCount)
-                assertTrue(admitted in 5..WorkerCountPolicy.maximumForHashes(hashCount))
-                assertTrue(admitted == 5 || admitted % CsqttConstants.Tunnel.WORKERS_PER_GROUP == 0)
+                assertTrue(admitted in 10..WorkerCountPolicy.maximumForHashes(hashCount))
+                assertTrue(admitted % CsqttConstants.Tunnel.WORKERS_PER_GROUP == 0)
             }
         }
         assertEquals(

@@ -138,6 +138,7 @@ internal suspend fun SettingsStore.saveImportedLink(
             power = parsed.power,
             name = customName?.trim()?.ifBlank { null } ?: parsed.host,
         ),
+        participantLink = rawLink.takeIf { parsed.hashes.isNotEmpty() },
     )
 }
 

@@ -18,7 +18,7 @@ internal fun participantHashes(linkHashes: List<String>, removed: Set<String>, o
     (linkHashes.filterNot { it in removed } + ownHashes.split(Regex("[,\\s\\n]+")))
         .map(String::trim).filter(String::isNotEmpty).distinct().joinToString(",")
 
-suspend fun resolveConnectionSource(store: SettingsStore): ConnectionSource? {
+suspend fun resolveConnectionSource(store: SettingsStore, updateLogMask: Boolean = true): ConnectionSource? {
     val invalidHashes = VkHashValidationCodec.decode(store.vkHashCheckResults.first())
     fun activeHashes(raw: String): String {
         val rawList = raw.split(Regex("[,\\s\\n]+")).map(String::trim).filter { it.length >= 16 }.distinct()
@@ -28,7 +28,7 @@ suspend fun resolveConnectionSource(store: SettingsStore): ConnectionSource? {
 
     if (store.csqttLinkMode.first()) {
         val link = parseCsqttLink(store.csqttLink.first()) ?: return null
-        TunnelManager.ownerHashes = link.hashes
+        if (updateLogMask) TunnelManager.ownerHashes = link.hashes
         val removed = store.linkHashesRemoved.first()
         val tokenFromLink = link.vkAccessToken.isNotEmpty()
         return ConnectionSource(
@@ -43,7 +43,7 @@ suspend fun resolveConnectionSource(store: SettingsStore): ConnectionSource? {
         )
     }
 
-    TunnelManager.ownerHashes = emptyList()
+    if (updateLogMask) TunnelManager.ownerHashes = emptyList()
     val basePeer = store.peer.first()
     val passwordState = store.connectionPasswordState.first()
     val password = passwordState.value

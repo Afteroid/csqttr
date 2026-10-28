@@ -391,22 +391,13 @@ internal fun DeployTab(
         val deployCertificate = if (savedSshKeysMode) savedSshCertificate else ""
         val deployPassword = if (savedSshKeysMode) "" else sshPassword
         val effectiveMainPass = savedMainPass
-        scope.launch {
-            settingsStore.saveDeploy(host)
-            settingsStore.saveDeploySecrets(effectiveMainPass, sshLogin, sshPassword, savedWebLogin, savedWebPassword)
-            // the ports as the form holds them (they are the profile's connection port): the deployed server's ports
-            // are written by saveDeployedServer only once the deploy succeeded
-            if (savedManualPorts) {
-                settingsStore.savePorts(
-                    peerPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: effectivePeerPort,
-                    webPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: effectiveWebPort,
-                    effectiveSshPort.toString(),
-                )
-            }
-        }
+        val deploymentDraft = savedSettings.copy(ip = host, sshLogin = sshLogin, sshPassword = sshPassword,
+            sshPort = effectiveSshPort.toString(), serverPeerPort = effectivePeerPort, serverWebPort = effectiveWebPort,
+            mainPassword = effectiveMainPass, webLogin = savedWebLogin, webPassword = savedWebPassword, dockerInstall = dockerInstall)
         DeployManager.startDeploy()
         DeployManager.scope.launch {
             try {
+                settingsStore.saveDeployProfileDraft(deploymentDraft, restoreConnection = true)
                 context.startForegroundService(Intent(context, TunnelService::class.java).apply { action = "DEPLOY_START" })
                 val success = performDeploy(
                     context = context,
@@ -429,7 +420,7 @@ internal fun DeployTab(
                 )
                 if (success) {
                     passwordToSynchronizeAfterDeploy(success, effectiveMainPass)?.let { mainPassword ->
-                        settingsStore.saveConnectionPassword(mainPassword, deployProfile)
+                        settingsStore.saveConnectionPassword(mainPassword, settingsStore.linkedConnectionProfile(deployProfile))
                         TunnelManager.addDeployInfoLog("Пароль подключения синхронизирован с паролем сервера")
                     }
                     settingsStore.saveDeployedServer(deployProfile, host, effectivePeerPort, effectiveWebPort)

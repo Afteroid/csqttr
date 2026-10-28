@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import com.csqtt.client.SettingsStore
+import com.csqtt.client.BatterySaver
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -39,7 +40,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
-import com.csqtt.client.BatterySaver
 import com.csqtt.client.ui.legacy.dialogs.ImportExportDialog
 import com.csqtt.client.ui.legacy.dialogs.QrScannerDialog
 import com.csqtt.client.ui.legacy.dialogs.SupportDeveloperDialog
@@ -270,7 +270,7 @@ fun FloatingToolbar(
                         onSelected = { role ->
                             val participant = role == UsageRole.Participant
                             if (participant != csqttLinkMode) {
-                                scope.launch { settingsStore.saveCsqttLinkMode(participant) }
+                                scope.launch { settingsStore.saveUiOwnerMode(!participant) }
                             }
                         },
                         modifier = Modifier

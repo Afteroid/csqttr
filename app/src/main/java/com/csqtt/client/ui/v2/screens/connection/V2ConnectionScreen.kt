@@ -36,7 +36,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatterySaver
+import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -116,6 +117,7 @@ fun V2ConnectionScreen(
     val cooldownActive by TunnelManager.cooldownActive.collectAsStateWithLifecycle()
     val uptimeSeconds by TunnelManager.uptimeSeconds.collectAsStateWithLifecycle()
     val tunnelBusy = tunnelRunning || tunnelStarting || tunnelStopping || autoPausedForWifi
+    val profileChecking by com.csqtt.client.ProfileTunnelProbe.isChecking.collectAsStateWithLifecycle()
 
     val peer by settingsStore.peer.collectAsStateWithLifecycle(initialValue = "")
     val vkHashes by settingsStore.vkHashes.collectAsStateWithLifecycle(initialValue = "")
@@ -315,6 +317,7 @@ fun V2ConnectionScreen(
     }
 
     fun toggleTunnel() {
+        if (profileChecking) return
         if (tunnelRunning || tunnelStarting || autoPausedForWifi) {
             context.startService(Intent(context, TunnelService::class.java).apply { action = "STOP" })
             return
@@ -364,151 +367,38 @@ fun V2ConnectionScreen(
 
     // --- visuals ---
     val isStarting = tunnelStarting && !tunnelRunning && !tunnelStopping
-    val canToggle = !tunnelStopping &&
+    val canToggle = !profileChecking && !tunnelStopping &&
         (tunnelRunning || isStarting || autoPausedForWifi || !cooldownActive || !configurationValid)
     val activeVisual = tunnelRunning || isStarting || autoPausedForWifi || tunnelStopping
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = V2Sizes.ScreenPadding),
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            V2TopBar(
-                version = version,
-                onSettings = onSettings,
-                onVersionClick = onVersionClick,
-                actions = {
-                    V2CircleIconButton(
-                        icon = Icons.Filled.Speed,
-                        contentDescription = "Замер ресурсов",
-                        onClick = onOpenResourceMonitor,
-                    )
-                    V2CircleIconButton(
-                        iconPainter = painterResource(R.drawable.ic_v2_plus),
-                        contentDescription = "Добавить профиль",
-                        onClick = { showAddChoiceDialog = true },
-                    )
-                },
-            )
-
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            V2FlowerButton(
-                connected = activeVisual,
-                enabled = canToggle,
-                onClick = { toggleTunnel() },
-            )
-            Text(
-                text = if (activeVisual) "Подключено" else "Отключено",
-                style = MaterialTheme.typography.headlineSmall,
-                color = colors.textPrimary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = V2Spacing.Xxl),
-            )
-            Text(
-                text = connectionHint(
-                    running = tunnelRunning,
-                    starting = isStarting,
-                    stopping = tunnelStopping,
-                    autoPaused = autoPausedForWifi,
-                    cooldown = cooldownActive,
-                    uptimeSeconds = uptimeSeconds,
-                    configurationValid = configurationValid,
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.textMuted,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = V2Spacing.Xs),
-            )
-            // «Экономия батареи» in force: said under the status, where the user looks
-            val batterySaving by com.csqtt.client.BatterySaver.active.collectAsStateWithLifecycle()
-            if (batterySaving && tunnelRunning) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(top = V2Spacing.Sm, start = V2Spacing.Lg, end = V2Spacing.Lg),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.BatterySaver,
-                        contentDescription = null,
-                        tint = colors.warning,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        text = com.csqtt.client.BatterySaver.BADGE,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.warning,
-                        textAlign = TextAlign.Center,
-                    )
+    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        V2TopBar(version = version, onSettings = onSettings, actions = {
+            V2CircleIconButton(iconPainter = painterResource(R.drawable.ic_v2_plus), contentDescription = "Добавить профиль", onClick = { showAddChoiceDialog = true })
+        })
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.CircleShape,
+                color = colors.accentSoft, modifier = Modifier.size(204.dp)) {
+                Box(contentAlignment = Alignment.Center) {
+            androidx.compose.material3.Surface(onClick = { toggleTunnel() }, enabled = canToggle, shape = androidx.compose.foundation.shape.CircleShape,
+                color = if(activeVisual) colors.accent else colors.flower,
+                border = androidx.compose.foundation.BorderStroke(2.dp, colors.accent.copy(alpha = 0.65f)), modifier = Modifier.size(172.dp)) {
+                Column(verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                    val buttonText = colors.onAccent
+                    Icon(androidx.compose.material.icons.Icons.Outlined.PowerSettingsNew, if(activeVisual) "Отключить" else "Подключить", tint = buttonText, modifier = Modifier.size(56.dp))
+                    Text(when { profileChecking -> "Проверка…"; tunnelStopping -> "Остановка…"; isStarting -> "Подключение…"; autoPausedForWifi -> "Пауза Wi-Fi"; tunnelRunning -> "Подключено"; else -> "Отключено" },
+                        fontSize = 13.sp, color = buttonText, modifier = Modifier.padding(top = 10.dp))
+                    if(tunnelRunning) Text(formatTunnelUptime(uptimeSeconds), fontSize = 13.sp, color = buttonText, modifier = Modifier.padding(top = 4.dp))
+                }
+            }
                 }
             }
         }
-
-            V2ProfileCard(
-                name = if (activeProfile in occupiedProfiles) {
-                    profileDisplayName(activeProfile, profileNames, profileSubscriptions)
-                } else {
-                    "Нет профилей"
-                },
-                profileIndex = activeProfile,
-                expanded = showProfileDialog,
-                onClick = { showProfileDialog = !showProfileDialog },
-                modifier = Modifier.padding(bottom = V2Spacing.Sm),
-            )
-        }
-
-        if (showProfileDialog) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { showProfileDialog = false },
-                    ),
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showProfileDialog,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(bottom = 74.dp),
-            enter = fadeIn(animationSpec = tween(180)) +
-                    slideInVertically(
-                        initialOffsetY = { it / 4 },
-                        animationSpec = tween(180),
-                    ),
-            exit = fadeOut(animationSpec = tween(140)) +
-                    slideOutVertically(
-                        targetOffsetY = { it / 6 },
-                        animationSpec = tween(140),
-                    ),
-        ) {
-            V2ProfilePickerMenu(
-                modifier = Modifier.fillMaxWidth(),
-                settingsStore = settingsStore,
-                activeProfile = activeProfile,
-                profileNames = profileNames,
-                occupiedProfiles = occupiedProfiles,
-                profileSubscriptions = profileSubscriptions,
-                tunnelBusy = tunnelBusy,
-                onDismiss = { showProfileDialog = false },
-                onEditProfile = {
-                    creatingProfile = false
-                    editingProfile = it
-                },
-            )
-        }
+        val batterySaving by com.csqtt.client.BatterySaver.active.collectAsStateWithLifecycle()
+        if (batterySaving && tunnelRunning) Text(com.csqtt.client.BatterySaver.BADGE, color = colors.warning, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+        HappServerList(settingsStore, activeProfile, tunnelBusy, { creatingProfile = false; editingProfile = it }, Modifier.weight(1f).padding(bottom = 8.dp))
+    }
+    if(showProfileDialog) androidx.compose.ui.window.Dialog(onDismissRequest = { showProfileDialog = false }) {
+        V2ProfilePickerMenu(settingsStore, activeProfile, profileNames, occupiedProfiles, profileSubscriptions, tunnelBusy, { showProfileDialog = false }, { creatingProfile = false; editingProfile = it })
     }
 
     V2AddProfileMenu(

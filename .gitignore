@@ -11,6 +11,7 @@ local.properties
 app/src/main/jniLibs/
 app/src/main/assets/csqtt-linux-*
 .local/
+.idea/
 auto-deploy/
 scripts/.env
 build/

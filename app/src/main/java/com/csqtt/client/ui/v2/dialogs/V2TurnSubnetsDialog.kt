@@ -46,6 +46,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.csqtt.client.TurnSubnetRegistry
+import com.csqtt.client.PingResultsCache
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.csqtt.client.ui.v2.components.V2CircleIconButton
 import com.csqtt.client.ui.v2.components.V2DropdownPill
 import com.csqtt.client.ui.v2.components.V2PillButton
@@ -76,7 +78,7 @@ fun V2TurnSubnetsDialog(
     var currentIpLimit by remember(turnSubnetIpLimit) { mutableStateOf(turnSubnetIpLimit) }
     val limitInt = currentIpLimit.toIntOrNull()
 
-    val pingResults = remember { mutableStateMapOf<String, Int?>() }
+    val pingResults by PingResultsCache.turnResults.collectAsStateWithLifecycle()
     val pingStatus = remember { mutableStateMapOf<String, Boolean>() }
     var isPinging by remember { mutableStateOf(false) }
 
@@ -110,14 +112,14 @@ fun V2TurnSubnetsDialog(
         if (isPinging) return
         scope.launch {
             isPinging = true
-            pingResults.clear()
+            PingResultsCache.clearTurn()
             pingStatus.clear()
             eligibleSubnets.forEach { subnet ->
                 pingStatus[subnet.id] = true
                 val rtt = withContext(Dispatchers.IO) {
                     measureSubnetRtt(subnet.ips)
                 }
-                pingResults[subnet.id] = rtt?.roundToInt() ?: -1
+                PingResultsCache.saveTurn(subnet.id, rtt?.roundToInt() ?: -1)
                 pingStatus[subnet.id] = false
             }
             isPinging = false

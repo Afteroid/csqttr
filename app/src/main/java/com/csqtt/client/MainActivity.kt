@@ -137,13 +137,10 @@ class MainActivity : ComponentActivity() {
 
         checkAndRequestNotifications()
 
-        // Subscriptions refresh while the app is open, whichever design is shown (it lived in the V2 screen only)
+        com.csqtt.client.ui.v2.screens.settings.preloadAvatars(this)
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (isActive) {
-                    SubscriptionSync.refreshDue(appSettingsStore)
-                    delay(30_000L)
-                }
+                while (isActive) { SubscriptionSync.refreshDue(appSettingsStore); delay(30_000L) }
             }
         }
 
@@ -151,16 +148,15 @@ class MainActivity : ComponentActivity() {
             val authContext = LocalContext.current.applicationContext
             val authScope = rememberCoroutineScope()
             val uiStateHolder = rememberSaveableStateHolder()
-            // The look the user chose in settings: classic (the default) or the V2 redesign; null until it is read.
             val design by appSettingsStore.uiDesign.collectAsStateWithLifecycle<String?>(initialValue = null)
-            val v2Design = design == CsqttConstants.Theme.DESIGN_V2
+            val chosenTheme by appSettingsStore.themeMode.collectAsStateWithLifecycle("system")
+            val dark = when (chosenTheme) { "dark" -> true; "light" -> false; else -> androidx.compose.foundation.isSystemInDarkTheme() }
             if (renderUi) {
-                uiStateHolder.SaveableStateProvider(if (v2Design) "main_ui_v2" else "main_ui") {
+                uiStateHolder.SaveableStateProvider("main_ui_${design ?: "loading"}") {
             val settingsStore = remember { appSettingsStore }
             if (design == null) {
-                // a few frames at start: drawing nothing beats flashing the other design
-            } else if (v2Design) {
-                LaunchedEffect(Unit) { com.csqtt.client.ui.v2.screens.settings.preloadAvatars(authContext) }
+                // Wait for the stored choice instead of briefly drawing the other design.
+            } else if (design == "v2") {
                 CsqttV2Root(
                     settingsStore = settingsStore,
                     onVkAuthRequested = { showVkAuthDialog = true },
@@ -221,22 +217,21 @@ class MainActivity : ComponentActivity() {
             }
             if (showVkAuthDialog) {
                 val onToken: (VkAuthPayload) -> Unit = { payload ->
-                    showVkAuthDialog = false
-                    authScope.launch {
-                        appSettingsStore.saveVkAccessToken(payload.token, payload.userId)
-                        // VK can hand over an expiring token now and then (accepted after one retry): say which it is
-                        val kind = if (payload.expiresIn > 0) "VK access token сохранён (временный)" else "Вечный VK access token сохранён"
-                        authContext.showRaisedToast(kind, Toast.LENGTH_SHORT)
+                        showVkAuthDialog = false
+                        authScope.launch {
+                            appSettingsStore.saveVkAccessToken(payload.token, payload.userId)
+                            authContext.showRaisedToast(if (payload.expiresIn > 0) "Токен VK сохранён (временный)" else "Токен VK сохранён", Toast.LENGTH_SHORT)
+                        }
                     }
-                }
-                if (v2Design) {
-                    V2VkAuthDialog(onToken = onToken, onDismiss = { showVkAuthDialog = false })
-                } else {
-                    VkAuthDialog(onToken = onToken, onDismiss = { showVkAuthDialog = false })
+                if (design == "classic") CSQTTTheme(themeMode = chosenTheme) {
+                    com.csqtt.client.ui.legacy.dialogs.VkAuthDialog(onToken, onDismiss = { showVkAuthDialog = false })
+                } else com.csqtt.client.ui.v2.design.CsqttV2Theme(darkTheme = dark) {
+                    VkAuthDialog(onToken, onDismiss = { showVkAuthDialog = false })
                 }
             }
             val pendingLink = pendingDeepLink
-            if (pendingLink != null && v2Design) {
+            if (pendingLink != null && design == "v2") {
+                com.csqtt.client.ui.v2.design.CsqttV2Theme(darkTheme = dark) {
                 com.csqtt.client.ui.v2.dialogs.V2BrowserImportDialog(
                     rawLink = pendingLink,
                     settingsStore = remember { appSettingsStore },
@@ -246,6 +241,7 @@ class MainActivity : ComponentActivity() {
                         showRaisedToast("Профиль «$name» успешно импортирован", Toast.LENGTH_SHORT)
                     },
                 )
+                }
             }
         }
     }
@@ -362,13 +358,15 @@ fun MainScreen(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val activeProfile by settingsStore.activeProfile.collectAsStateWithLifecycle(initialValue = 0)
-    val deploySettings by settingsStore.deploySettingsSnapshot.collectAsStateWithLifecycle(
+    val deployStore = remember(context.applicationContext) { SettingsStore(context.applicationContext, deployScope = true) }
+    val deploySettings by deployStore.deploySettingsSnapshot.collectAsStateWithLifecycle(
         initialValue = DeploySettingsSnapshot()
     )
     val tunnelAuthSettings by settingsStore.tunnelAuthSnapshot.collectAsStateWithLifecycle(
         initialValue = TunnelAuthSnapshot()
     )
-    val csqttLinkMode = tunnelAuthSettings.csqttLinkMode
+    val ownerMode by settingsStore.uiOwnerMode.collectAsStateWithLifecycle(false)
+    val csqttLinkMode = !ownerMode // Navigation role is independent of a profile's link authentication.
     val participantShowLogs by settingsStore.participantShowLogs.collectAsStateWithLifecycle(initialValue = false)
     val autoPauseOnWifi by settingsStore.autoPauseOnWifi.collectAsStateWithLifecycle(initialValue = false)
     val excludedApps by settingsStore.excludedApps.collectAsStateWithLifecycle(
@@ -392,7 +390,7 @@ fun MainScreen(
         initialValue = DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
     )
     var pendingRelease by remember { mutableStateOf<AppReleaseInfo?>(null) }
-    val currentVersion = remember { "v${BuildConfig.VERSION_NAME.removePrefix("v")}" }
+    val currentVersion = remember { "v${BuildConfig.VERSION_NAME.removePrefix("v").substringBefore('-')}" }
     val safeBottomInset = with(density) { WindowInsets.safeDrawing.getBottom(density).toDp() }
     val navToolbarHeight = 66.dp
     val navToolbarBottomMargin = 10.dp
@@ -593,7 +591,7 @@ fun MainScreen(
                                     Spacer(modifier = Modifier.fillMaxSize())
                                 }
                                 2 -> if (!csqttLinkMode) {
-                                    DeployTab(settingsStore, deploySettings)
+                                    DeployTab(deployStore, deploySettings)
                                 } else {
                                     Spacer(modifier = Modifier.fillMaxSize())
                                 }

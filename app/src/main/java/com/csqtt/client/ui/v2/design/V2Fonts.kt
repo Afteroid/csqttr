@@ -10,25 +10,13 @@ import com.csqtt.client.R
  * Nunito (variable) — display font: screen titles, hero text, version pills, profile card.
  * Cyrillic is fully supported with clean rounded geometric shapes.
  */
-val V2DisplayFamily = FontFamily(
-    displayFont(FontWeight.Normal),
-    displayFont(FontWeight.Medium),
-    displayFont(FontWeight.SemiBold),
-    displayFont(FontWeight.Bold),
-    displayFont(FontWeight.ExtraBold),
-)
+val V2DisplayFamily = FontFamily.Default
 
 /**
  * Nunito (variable) — body font: rows, fields, badges, descriptions.
  * Cyrillic is fully supported.
  */
-val V2BodyFamily = FontFamily(
-    bodyFont(FontWeight.Normal),
-    bodyFont(FontWeight.Medium),
-    bodyFont(FontWeight.SemiBold),
-    bodyFont(FontWeight.Bold),
-    bodyFont(FontWeight.ExtraBold),
-)
+val V2BodyFamily = FontFamily.Default
 
 /**
  * Syne (variable) — Latin-only accent font for brand words (CSQTT-Rebirth, GitHub, LOGO).
@@ -45,13 +33,7 @@ val V2AccentFamily = FontFamily(
 /**
  * TT Travels Next (variable) — signature geometric font for version pills and badges.
  */
-val V2VersionFamily = FontFamily(
-    versionFont(FontWeight.Normal),
-    versionFont(FontWeight.Medium),
-    versionFont(FontWeight.SemiBold),
-    versionFont(FontWeight.Bold),
-    versionFont(FontWeight.ExtraBold),
-)
+val V2VersionFamily = FontFamily.Default
 
 /**
  * Monospace — terminal and log lines. System monospace until a bundled mono

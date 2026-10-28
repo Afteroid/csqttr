@@ -3,12 +3,20 @@
 package com.csqtt.client.ui.v2.dialogs
 
 import android.content.ClipboardManager
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.material3.ButtonDefaults
+import com.csqtt.client.ui.v2.components.HappHelp
+import kotlinx.coroutines.CancellationException
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -20,10 +28,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,9 +47,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -51,15 +55,13 @@ import androidx.compose.ui.unit.sp
 import com.csqtt.client.VkHashValidationCodec
 import com.csqtt.client.VkHashValidationStatus
 import com.csqtt.client.ui.legacy.utils.stripVkUrlStatic
-import com.csqtt.client.ui.v2.components.V2CircleIconButton
+import com.csqtt.client.ui.v2.design.V2Theme
+import androidx.compose.ui.focus.focusRequester
 import com.csqtt.client.ui.v2.components.V2PillButton
 import com.csqtt.client.ui.v2.components.V2PillStyle
 import com.csqtt.client.ui.v2.components.V2SquareIconButton
-import com.csqtt.client.ui.v2.components.V2TextField
 import com.csqtt.client.ui.v2.design.V2BodyFamily
 import com.csqtt.client.ui.v2.design.V2Shapes
-import com.csqtt.client.ui.v2.design.V2Spacing
-import com.csqtt.client.ui.v2.design.V2Theme
 import kotlinx.coroutines.launch
 
 @Composable
@@ -93,14 +95,13 @@ fun V2HashesDialog(
     var h5 by rememberSaveable { mutableStateOf(hash5) }
     var h6 by rememberSaveable { mutableStateOf(hash6) }
     var results by remember(validationResults) { mutableStateOf(validationResults) }
-    var removedOwner by remember(removedOwnerHashes) { mutableStateOf(removedOwnerHashes) }
-    val fieldFocus = remember { List(6) { FocusRequester() } }
-
     var isChecking by remember { mutableStateOf(false) }
     var unavailableCount by remember { mutableIntStateOf(0) }
 
     val hashes = listOf(h1, h2, h3, h4, h5, h6)
 
+    var removedOwner by remember(removedOwnerHashes) { mutableStateOf(removedOwnerHashes) }
+    val fieldFocus = remember { List(6) { androidx.compose.ui.focus.FocusRequester() } }
     // the tunnel takes at most MAX_VK_HASHES, the owner's first: say when the participant's own would be cut
     val ownerInUse = ownerHashes.count { it !in removedOwner }
     val ownFilled = hashes.count { it.trim().length >= 16 }
@@ -135,9 +136,7 @@ fun V2HashesDialog(
         onAutoSave?.invoke(cur1, cur2, cur3, cur4, cur5, cur6)
     }
 
-    // the check covers the owner's hashes still in use too (their status shows, never the hash)
-    val activeHashes = (ownerHashes.filterNot { it in removedOwner } + hashes.map(String::trim))
-        .filter { it.length >= 16 }.distinct()
+    val activeHashes = (ownerHashes.filterNot { it in removedOwner } + hashes.map(String::trim)).filter { it.length >= 16 }.distinct()
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -153,77 +152,24 @@ fun V2HashesDialog(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-        containerColor = colors.bottomSurface,
+        containerColor = colors.surface,
         contentColor = colors.textPrimary,
-        scrimColor = Color.Black.copy(alpha = 0.55f),
-        dragHandle = {
-            Box(
-                modifier = Modifier
-                    .padding(top = 10.dp, bottom = 4.dp)
-                    .size(width = 36.dp, height = 4.dp)
-                    .clip(V2Shapes.Pill)
-                    .background(colors.textMuted.copy(alpha = 0.4f)),
-            )
-        },
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp)
-                .navigationBarsPadding()
-                .imePadding(),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(horizontal = 16.dp).padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Phone,
-                        contentDescription = null,
-                        tint = colors.contrast,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Text(
-                        text = "VK Хеши",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontFamily = V2BodyFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                        ),
-                        color = colors.textPrimary,
-                    )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Ручные хеши", Modifier.weight(1f), color = colors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                HappHelp("Ручные хеши", "Вставьте ссылки на звонки VK или готовые хеши. Доступно шесть полей. Проверка отмечает доступность каждого хеша; она не проверяет VPS или пароль туннеля.")
+                IconButton(onClick = { animateDismiss() }, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Default.Close, "Закрыть", tint = colors.textSecondary, modifier = Modifier.size(20.dp))
                 }
-                V2CircleIconButton(
-                    icon = Icons.Default.Close,
-                    contentDescription = "Закрыть",
-                    onClick = { animateDismiss() },
-                )
             }
-
-            Text(
-                text = "Больше хешей — выше лимит потоков и скорость",
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = V2BodyFamily,
-                    fontSize = 13.sp,
-                ),
-                color = colors.textSecondary,
-            )
-
-            // Scrollable Hash Inputs
+            Text("Ссылки на звонки VK или готовые хеши", color = colors.textSecondary, fontSize = 12.sp)
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = false)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (ownerHashes.isNotEmpty()) {
                     ownerHashes.forEachIndexed { idx, ownerHash ->
@@ -325,196 +271,67 @@ fun V2HashesDialog(
                     }
                 }
 
-                hashes.forEachIndexed { idx, value ->
-                    // with the owner's hashes the participant's own are optional
-                    val label = if (idx == 0 && ownerHashes.isEmpty()) "VK Хеш 1 (основной) *" else "VK Хеш ${idx + 1}"
-                    val isShort = value.isNotBlank() && value.length < 16
+                hashes.forEachIndexed { index, value ->
+                    val short = value.isNotBlank() && value.length < 16
                     val status = results[value]
-                    val isValid = status == VkHashValidationStatus.Valid
-                    val isInvalid = status == VkHashValidationStatus.Invalid
-
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = V2BodyFamily,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                ),
-                                color = colors.textPrimary,
-                                modifier = Modifier.weight(1f),
-                            )
-                            if (isValid) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = "Активен",
-                                        tint = Color(0xFF66BB6A),
-                                        modifier = Modifier.size(14.dp),
-                                    )
-                                    Text(
-                                        text = "Активен",
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            fontFamily = V2BodyFamily,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        ),
-                                        color = Color(0xFF66BB6A),
-                                    )
-                                }
-                            } else if (isInvalid) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Error,
-                                        contentDescription = "Невалиден",
-                                        tint = colors.error,
-                                        modifier = Modifier.size(14.dp),
-                                    )
-                                    Text(
-                                        text = "Недействителен",
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            fontFamily = V2BodyFamily,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        ),
-                                        color = colors.error,
-                                    )
-                                }
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            V2TextField(
-                                value = value,
-                                onValueChange = { updateHash(idx, it) },
-                                placeholder = "Вставьте ссылку или хеш",
-                                isError = isShort || isInvalid,
-                                enabled = !isChecking,
-                                modifier = Modifier.weight(1f).focusRequester(fieldFocus[idx]),
-                            )
-
-                            V2SquareIconButton(
-                                icon = Icons.Outlined.ContentPaste,
-                                contentDescription = "Вставить",
-                                onClick = {
-                                    val clipText = context.getSystemService(ClipboardManager::class.java)
-                                        ?.primaryClip
-                                        ?.takeIf { it.itemCount > 0 }
-                                        ?.getItemAt(0)
-                                        ?.coerceToText(context)
-                                        ?.toString()
-                                    if (!clipText.isNullOrBlank()) {
-                                        updateHash(idx, clipText)
+                    val invalid = status == VkHashValidationStatus.Invalid
+                    Column {
+                        Surface(shape = RoundedCornerShape(14.dp), color = colors.field, border = BorderStroke(1.dp, colors.outline)) {
+                            Row(Modifier.fillMaxWidth().height(50.dp).padding(start = 10.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.padding(end = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${index + 1}", color = colors.accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                    if (status == VkHashValidationStatus.Valid || invalid) {
+                                        Icon(if (invalid) Icons.Default.Error else Icons.Default.CheckCircle,
+                                            if (invalid) "Хеш ${index + 1}: недействителен" else "Хеш ${index + 1}: активен",
+                                            tint = if (invalid) colors.error else colors.success, modifier = Modifier.size(12.dp))
                                     }
-                                },
-                                size = 54.dp,
-                                iconSize = 20.dp,
-                                shape = V2Shapes.Field,
-                                backgroundColor = colors.field,
-                                contentColor = colors.accent,
-                            )
-
-                            if (value.isNotEmpty()) {
-                                V2SquareIconButton(
-                                    icon = Icons.Default.Delete,
-                                    contentDescription = "Очистить",
-                                    onClick = { updateHash(idx, "") },
-                                    size = 54.dp,
-                                    iconSize = 20.dp,
-                                    shape = V2Shapes.Field,
-                                    backgroundColor = colors.field,
-                                    contentColor = colors.textMuted,
+                                }
+                                BasicTextField(
+                                    value = value, onValueChange = { updateHash(index, it) },
+                                    enabled = !isChecking, singleLine = true, modifier = Modifier.weight(1f).focusRequester(fieldFocus[index]),
+                                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.textPrimary, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+                                    decorationBox = { input -> Box(contentAlignment = Alignment.CenterStart) {
+                                        if (value.isEmpty()) Text("Ссылка VK или хеш · от 16 знаков", color = colors.textMuted, fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                        input()
+                                    } },
                                 )
+                                IconButton(onClick = {
+                                    context.getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 }
+                                        ?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotBlank() }?.let { updateHash(index, it) }
+                                }, enabled = !isChecking, modifier = Modifier.size(40.dp)) {
+                                    Icon(Icons.Outlined.ContentPaste, "Вставить хеш ${index + 1}", tint = colors.textSecondary, modifier = Modifier.size(18.dp))
+                                }
+                                if (value.isNotEmpty()) IconButton(onClick = { updateHash(index, "") }, enabled = !isChecking, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Default.Close, "Очистить хеш ${index + 1}", tint = colors.textMuted, modifier = Modifier.size(17.dp))
+                                }
                             }
                         }
-
-                        if (isShort) {
-                            Text(
-                                text = "Хеш ${idx + 1} слишком короткий (минимум 16 символов)",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = V2BodyFamily,
-                                    fontSize = 12.sp,
-                                ),
-                                color = colors.error,
-                            )
-                        }
+                        if (short || invalid) Text(if (short) "Минимум 16 символов" else "Хеш недействителен", color = colors.error, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp, top = 2.dp))
                     }
                 }
-
-                if (unavailableCount > 0) {
-                    Text(
-                        text = "Не удалось проверить: $unavailableCount. Поля оставлены без изменений.",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = V2BodyFamily,
-                            fontSize = 12.sp,
-                        ),
-                        color = colors.textSecondary,
-                    )
-                }
             }
-
-            // Bottom Actions
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                V2PillButton(
-                    text = if (isChecking) "Проверяем..." else "Проверить актив (${activeHashes.size})",
-                    onClick = {
-                        isChecking = true
-                        unavailableCount = 0
-                        scope.launch {
+            if (unavailableCount > 0) Text("Не удалось проверить: $unavailableCount", color = colors.textSecondary, fontSize = 12.sp)
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = {
+                    isChecking = true
+                    unavailableCount = 0
+                    scope.launch {
+                        try {
                             val checked = onCheck(activeHashes)
-                            val updatedResults = results + checked
-                            results = updatedResults
-                            onValidationResultsChange(updatedResults)
+                            results = results + checked
+                            onValidationResultsChange(results)
                             unavailableCount = activeHashes.size - checked.size
-                            isChecking = false
-                        }
-                    },
-                    style = V2PillStyle.Outline,
-                    enabled = !isChecking && activeHashes.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth(),
-                    height = 48.dp,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    V2PillButton(
-                        text = "Отмена",
-                        onClick = { animateDismiss() },
-                        style = V2PillStyle.Outline,
-                        modifier = Modifier.weight(1f),
-                        height = 48.dp,
-                    )
-                    V2PillButton(
-                        text = "Сохранить",
-                        onClick = {
-                            onSave(h1, h2, h3, h4, h5, h6)
-                            animateDismiss()
-                        },
-                        style = V2PillStyle.Contrast,
-                        modifier = Modifier.weight(1f),
-                        height = 48.dp,
-                    )
+                        } catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { unavailableCount = activeHashes.size }
+                        finally { isChecking = false }
+                    }
+                }, enabled = !isChecking && activeHashes.isNotEmpty(), modifier = Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, colors.outline)) {
+                    Text(if (isChecking) "Проверяем…" else "Проверить (${activeHashes.size})", fontSize = 13.sp)
+                }
+                Button(onClick = { onSave(h1, h2, h3, h4, h5, h6); animateDismiss() }, enabled = !isChecking,
+                    modifier = Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = Color.White)) {
+                    Text("Сохранить", fontSize = 13.sp)
                 }
             }
         }

@@ -93,7 +93,7 @@ internal fun friendlyDeployError(message: String?): String {
             text.contains("HostKey", ignoreCase = true) ||
             text.contains("host key", ignoreCase = true) ->
             "SSH-ключ сервера изменился или не принят"
-        text.contains("timeout", ignoreCase = true) ->
+        text.contains("timeout", ignoreCase = true) || text.contains("timed out", ignoreCase = true) ->
             "Истекло время ожидания SSH/SFTP"
         text.contains("UnknownHost", ignoreCase = true) ||
             text.contains("No route to host", ignoreCase = true) ->
@@ -462,66 +462,83 @@ internal fun createSSHClient(
     require(port in 1..65535) { "Invalid SSH port: $port" }
 
     ensureBouncyCastle()
-    val ssh = SshjClient()
-    ssh.connectTimeout = 30000
-    ssh.timeout = 300000
-    ssh.addHostKeyVerifier(SshHostKeyStore.TofuVerifier(context))
-
-    try {
-        ssh.connect(host, port)
-        runCatching { ssh.connection.keepAlive.keepAliveInterval = 10 }
+    val ssh = try {
+        connectSshTransport(
+            host,
+            port,
+            clientFactory = {
+                SshjClient().apply {
+                    addHostKeyVerifier(SshHostKeyStore.TofuVerifier(context))
+                }
+            },
+            onRetry = {
+                DeployManager.writeError("SSH handshake timeout at $host:$port; retrying once with a new socket")
+                TunnelManager.addDeployWarningLog("SSH не ответил за 15 с; повтор подключения")
+            },
+        )
     } catch (e: Exception) {
-        DeployManager.writeError("SSH connect failed (${e.javaClass.simpleName}): ${e.message}")
+        DeployManager.writeError("SSH connect failed at $host:$port (${e.javaClass.simpleName}): ${e.message}")
         throw e
     }
+    try {
+        runCatching { ssh.connection.keepAlive.keepAliveInterval = 10 }
 
-    if (keysMode) {
-        try {
-            val certificateText = certificate.takeIf { it.isNotBlank() }
-            DeployManager.writeError(
-                "SSH key mode: key=${privateKey.length}b, passphrase=${keyPassphrase.isNotBlank()}, " +
-                    "certificate=${certificateText?.length ?: 0}b",
-            )
-            val passwordFinder = if (keyPassphrase.isNotBlank()) {
-                PasswordUtils.createOneOff(keyPassphrase.toCharArray())
-            } else {
-                null
-            }
-            val keyProvider = ssh.loadKeys(privateKey, certificateText, passwordFinder)
-            ssh.authPublickey(user, keyProvider)
-        } catch (e: UserAuthException) {
-            DeployManager.writeError("SSH pubkey auth failed: ${e.message}")
-            throw IOException("Auth fail (public key): ${e.message}", e)
-        } catch (e: IOException) {
-            DeployManager.writeError("SSH key parse error: ${e.message}")
-            throw IOException("Auth fail (key parse): ${e.message}", e)
-        }
-    } else {
-        try {
-            ssh.authPassword(user, pass)
-        } catch (passwordError: UserAuthException) {
+        if (keysMode) {
             try {
-                ssh.auth(
-                    user,
-                    listOf(
-                        AuthKeyboardInteractive(
-                            PasswordResponseProvider(
-                                PasswordUtils.createOneOff(pass.toCharArray()),
+                val certificateText = certificate.takeIf { it.isNotBlank() }
+                DeployManager.writeError(
+                    "SSH key mode: key=${privateKey.length}b, passphrase=${keyPassphrase.isNotBlank()}, " +
+                        "certificate=${certificateText?.length ?: 0}b",
+                )
+                val passwordFinder = if (keyPassphrase.isNotBlank()) {
+                    PasswordUtils.createOneOff(keyPassphrase.toCharArray())
+                } else {
+                    null
+                }
+                val keyProvider = ssh.loadKeys(privateKey, certificateText, passwordFinder)
+                ssh.authPublickey(user, keyProvider)
+            } catch (e: UserAuthException) {
+                DeployManager.writeError("SSH pubkey auth failed: ${e.message}")
+                throw IOException("Auth fail (public key): ${e.message}", e)
+            } catch (e: IOException) {
+                DeployManager.writeError("SSH key parse error: ${e.message}")
+                throw IOException("Auth fail (key parse): ${e.message}", e)
+            }
+        } else {
+            try {
+                ssh.authPassword(user, pass)
+            } catch (passwordError: UserAuthException) {
+                try {
+                    ssh.auth(
+                        user,
+                        listOf(
+                            AuthKeyboardInteractive(
+                                PasswordResponseProvider(
+                                    PasswordUtils.createOneOff(pass.toCharArray()),
+                                ),
                             ),
                         ),
-                    ),
-                )
-            } catch (keyboardError: UserAuthException) {
-                DeployManager.writeError(
-                    "SSH password auth failed: password=${passwordError.message}; " +
-                        "keyboard-interactive=${keyboardError.message}",
-                )
-                throw IOException("Auth fail (password): ${keyboardError.message}", keyboardError)
+                    )
+                } catch (keyboardError: UserAuthException) {
+                    DeployManager.writeError(
+                        "SSH password auth failed: password=${passwordError.message}; " +
+                            "keyboard-interactive=${keyboardError.message}",
+                    )
+                    throw IOException("Auth fail (password): ${keyboardError.message}", keyboardError)
+                }
             }
         }
-    }
 
-    return ssh
+        // SocketClient.setTimeout only changes a stored field after connect; update the
+        // live socket too, so long SFTP transfers retain their session timeout.
+        ssh.timeout = SSH_SESSION_TIMEOUT_MS
+        ssh.socket.soTimeout = SSH_SESSION_TIMEOUT_MS
+        ssh.transport.timeoutMs = SSH_SESSION_TIMEOUT_MS
+        return ssh
+    } catch (error: Exception) {
+        runCatching { ssh.disconnect() }
+        throw error
+    }
 }
 
 private fun shellQuote(value: String): String {
@@ -610,7 +627,7 @@ internal suspend fun performServerCheck(
         val sshClient = DeploySSHClient(ssh, pass)
         TunnelManager.addDeploySuccessLog("SSH-соединение установлено")
         script = File(context.cacheDir, "csqtt-check-${System.nanoTime()}.sh")
-        context.assets.open("deploy.sh").use { input -> FileOutputStream(script).use { output -> input.copyTo(output) } }
+        writeDeployScript(context, script)
         sshClient.upload(script, "/tmp/deploy.sh")
         DeployManager.updateProgress(0.6f, "Проверка сервера…")
         val result = sshClient.execResult(rootCommand("bash /tmp/deploy.sh inventory", pass), timeout = SERVER_CHECK_TIMEOUT)
@@ -690,7 +707,7 @@ internal suspend fun performDeploy(
             return target
         }
 
-        val scriptFile = extractAsset("deploy.sh")
+        val scriptFile = File(workingDir, "deploy.sh").also { writeDeployScript(context, it) }
         val serverFile = extractAsset(serverArchitecture.assetName)
         // Update must keep the existing credentials/config: deploy.sh "update" reuses
         // /etc/csqtt/csqtt.env and deploy-overrides.json on the server.
@@ -836,9 +853,7 @@ internal suspend fun performUninstall(
         onProgress(0.15f, "Подготовка штатного удаления...")
         TunnelManager.addDeployInfoLog("Загрузка штатного установщика CSQTT")
         uninstallScript = File(context.cacheDir, "csqtt-uninstall-${System.nanoTime()}.sh")
-        context.assets.open("deploy.sh").use { input ->
-            FileOutputStream(uninstallScript).use { output -> input.copyTo(output) }
-        }
+        writeDeployScript(context, uninstallScript)
         if (!uninstallScript.isFile || uninstallScript.length() == 0L) {
             throw IOException("Не удалось подготовить штатный установщик CSQTT")
         }

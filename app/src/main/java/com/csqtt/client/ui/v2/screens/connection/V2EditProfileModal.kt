@@ -45,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.csqtt.client.WorkerCountPolicy
 import com.csqtt.client.CsqttConstants
 import com.csqtt.client.SettingsStore
+import kotlinx.coroutines.flow.first
 import com.csqtt.client.TunnelManager
 import com.csqtt.client.defaultProfileName
 import com.csqtt.client.showRaisedToast
@@ -60,7 +61,6 @@ import com.csqtt.client.ui.v2.design.V2Theme
 import com.csqtt.client.ui.v2.dialogs.V2WorkersInfoDialog
 import kotlinx.coroutines.launch
 
-private val CONNECTION_PASSWORD_REGEX = Regex("^[a-zA-Z0-9_.!?:#/-]+$")
 
 /**
  * Profile editor dialog, styled to the unified V2 design system.
@@ -94,7 +94,7 @@ fun V2EditProfileModal(
     var participantMode by rememberSaveable(profile) { mutableStateOf(false) }
     var subscriptionTitle by rememberSaveable(profile) { mutableStateOf("") }
     var subscriptionPower by rememberSaveable(profile) { mutableIntStateOf(0) }
-    var profileExtraWorkers by rememberSaveable(profile) { mutableStateOf(false) }
+    var profileWorkerMaximum by rememberSaveable(profile) { mutableIntStateOf(CsqttConstants.Tunnel.DEFAULT_MAX_WORKERS) }
 
     var peerError by remember { mutableStateOf(false) }
     var portError by remember { mutableStateOf(false) }
@@ -107,10 +107,7 @@ fun V2EditProfileModal(
     val serverWorkers by TunnelManager.serverAssignedWorkers.collectAsStateWithLifecycle()
     val workersLocked = tunnelRunning && profile == activeProfile
     val fixedWorkers = serverWorkers.takeIf { workersLocked && it in 3..100 }
-    // 70, or 100 with «Экстра потоки» (the store reads anything above it back as 70); a subscription can lower it
-    val workersCap = WorkerCountPolicy.defaultMaximum(profileExtraWorkers).let { max ->
-        subscriptionPower.takeIf { it in 10..100 }?.coerceAtMost(max) ?: max
-    }
+    val workersCap = subscriptionPower.takeIf { it in 10..100 }?.coerceAtMost(profileWorkerMaximum) ?: profileWorkerMaximum
 
     fun deleteProfile() {
         scope.launch {
@@ -122,10 +119,9 @@ fun V2EditProfileModal(
 
     LaunchedEffect(profile) {
         val snapshot = settingsStore.readProfileConnectionSettings(profile)
-        val maxForProfile = WorkerCountPolicy.defaultMaximum(snapshot.extraWorkers)
-        val cap = snapshot.subscriptionPower.takeIf { it in 10..100 }?.coerceAtMost(maxForProfile)
-            ?: maxForProfile
-        profileExtraWorkers = snapshot.extraWorkers
+        val configuredAuthMode = SettingsStore(context, readOnlyProfile = profile).vkAuthMode.first()
+        profileWorkerMaximum = com.csqtt.client.WorkerCountPolicy.defaultMaximum(snapshot.extraWorkers && configuredAuthMode != "auto_js")
+        val cap = snapshot.subscriptionPower.takeIf { it in 10..100 }?.coerceAtMost(profileWorkerMaximum) ?: profileWorkerMaximum
         subscriptionTitle = snapshot.subscriptionTitle
         subscriptionPower = snapshot.subscriptionPower
         peerInput = snapshot.peer
@@ -133,7 +129,7 @@ fun V2EditProfileModal(
         passwordInput = snapshot.connectionPassword
         passwordUnreadable = snapshot.connectionPasswordState ==
             com.csqtt.client.StoredSecretState.Unreadable
-        workers = snapshot.workersPerHash.toFloat().coerceIn(5f, cap.toFloat())
+        workers = com.csqtt.client.WorkerCountPolicy.normalize(snapshot.workersPerHash, cap).toFloat()
         linkInput = snapshot.csqttLink
         participantMode = snapshot.csqttLinkMode
         if (snapshot.csqttLinkMode) {
@@ -160,7 +156,7 @@ fun V2EditProfileModal(
 
             peerError = host.isBlank()
             portError = port == null || port !in 1..65535
-            passwordError = !password.matches(CONNECTION_PASSWORD_REGEX)
+            passwordError = !com.csqtt.client.ui.legacy.utils.isValidTunnelPassword(password)
 
             if (peerError || portError || passwordError) return
 
@@ -199,7 +195,7 @@ fun V2EditProfileModal(
 
             peerError = peer.isBlank()
             portError = port == null || port !in 1..65535
-            passwordError = !password.matches(CONNECTION_PASSWORD_REGEX)
+            passwordError = !com.csqtt.client.ui.legacy.utils.isValidTunnelPassword(password)
 
             if (peerError || portError || passwordError) return
 
