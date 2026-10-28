@@ -31,9 +31,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -65,6 +72,8 @@ fun V2LogsScreen(
     onVersionClick: (() -> Unit)? = null,
 ) {
     val colors = V2Theme.colors
+    var level by rememberSaveable { mutableStateOf("Все уровни") }
+    var source by rememberSaveable { mutableStateOf("Все события") }
 
     Column(
         modifier = modifier
@@ -77,6 +86,10 @@ fun V2LogsScreen(
             onSettings = onSettings,
             onVersionClick = onVersionClick,
         )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LogFilterMenu(level, logLevels, { level = it }, Modifier.weight(1f))
+            LogFilterMenu(source, logSources, { source = it }, Modifier.weight(1f))
+        }
         V2Card(
             modifier = Modifier
                 .weight(1f)
@@ -89,19 +102,30 @@ fun V2LogsScreen(
             contentPadding = PaddingValues(0.dp),
             contentModifier = Modifier.fillMaxSize(),
         ) {
-            V2LogsTerminal()
+            V2LogsTerminal(level, source)
         }
     }
 }
 
 @Composable
-private fun V2LogsTerminal() {
+private fun LogFilterMenu(selected: String, options: List<String>, onSelect: (String) -> Unit, modifier: Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        TextButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text("$selected ▾", fontSize = 13.sp) }
+        DropdownMenu(expanded, { expanded = false }) {
+            options.forEach { item -> DropdownMenuItem(text = { Text(item) }, onClick = { onSelect(item); expanded = false }) }
+        }
+    }
+}
+
+@Composable
+private fun V2LogsTerminal(levelFilter: String, sourceFilter: String) {
     val context = LocalContext.current
-    val currentLogs = TunnelManager.logs
+    val currentLogs = TunnelManager.logs.mapNotNull { filterLogEntry(it, levelFilter, sourceFilter) }
     val listState = rememberLazyListState()
     val isDeploying by DeployManager.isDeploying.collectAsStateWithLifecycle()
 
-    LaunchedEffect(currentLogs.size, isDeploying) {
+    LaunchedEffect(currentLogs.size, isDeploying, levelFilter, sourceFilter) {
         if (isDeploying) {
             val latestDeployIndex = currentLogs.indexOfLast { it.key.startsWith("deploy_") }
             if (latestDeployIndex >= 0) listState.animateScrollToItem(latestDeployIndex)
@@ -111,6 +135,7 @@ private fun V2LogsTerminal() {
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        if (currentLogs.isEmpty()) Text("Событий пока нет", color = V2Theme.colors.textSecondary, modifier = Modifier.align(Alignment.Center), fontSize = 13.sp)
         if (currentLogs.isNotEmpty()) {
             LazyColumn(
                 state = listState,
@@ -272,30 +297,29 @@ private fun V2LogLine(
     modifier: Modifier = Modifier,
 ) {
     val colors = V2Theme.colors
-    val level = entry.level ?: when {
-        entry.isError -> LogLevel.ERR
-        entry.priority <= 2 -> LogLevel.OK
-        entry.priority <= 4 -> LogLevel.DBG
-        entry.priority <= 6 -> LogLevel.NET
-        else -> LogLevel.LOG
-    }
+    val level = effectiveLogLevel(entry)
 
     val (rawTag, body) = parseMessageTag(entry.message, level)
     val isError = isErrorLog(rawTag, level, entry.isError)
+    val light = colors.background.luminance() > 0.5f
+    val errorColor = if(light) Color(0xFFB32626) else Color(0xFFFF897D)
+    val successColor = if(light) Color(0xFF186C3C) else Color(0xFF4ADE80)
 
     // Harmonious palette-based tag colors (no harsh bright red / green)
-    val tagBg = if (isError) colors.accentSoft else colors.surfaceElevated
-    val tagText = if (isError) colors.contrast else colors.accent
+    val green = isGreenLog(rawTag, level, entry.isError)
+    val tagBg = if(light) when { isError -> Color(0xFFFBE2E2); green -> Color(0xFFE1F3E7); else -> Color(0xFFE4EEFC) }
+        else when { isError -> Color(0xFF3E1218); green -> Color(0xFF052E16); else -> Color(0xFF0A223D) }
+    val tagText = when { isError -> errorColor; green -> successColor; light -> colors.accent; else -> Color(0xFF3DBFFD) }
 
     // Clean legible text from the theme palette
-    val bodyColor = colors.textPrimary
+    val bodyColor = when { isError -> errorColor; green -> successColor; level == LogLevel.DBG -> colors.textSecondary; else -> colors.textPrimary }
 
     val annotatedBody = remember(body, bodyColor, colors.accent, colors.contrast) {
         parseAnsiLogBody(
             text = body,
             defaultColor = bodyColor,
-            accentColor = colors.accent,
-            contrastColor = colors.contrast,
+            accentColor = successColor,
+            contrastColor = errorColor,
         )
     }
 

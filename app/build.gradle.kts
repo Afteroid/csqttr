@@ -107,8 +107,12 @@ android {
 
     buildTypes {
         getByName("debug") {
-            applicationIdSuffix = ".forktest"
-            versionNameSuffix = "-fork-test.3"
+            applicationIdSuffix = providers.gradleProperty("csqtt.debugApplicationIdSuffix")
+                .getOrElse(".forktest")
+            manifestPlaceholders["csqttDebugAppLabel"] = providers.gradleProperty("csqtt.debugAppLabel")
+                .getOrElse("@string/app_name")
+            versionNameSuffix = providers.gradleProperty("csqtt.debugVersionNameSuffix")
+                .getOrElse("-fork-test.3")
         }
         getByName("release") {
             isMinifyEnabled = true

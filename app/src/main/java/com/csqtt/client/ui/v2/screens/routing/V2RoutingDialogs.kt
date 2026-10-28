@@ -88,7 +88,6 @@ import com.csqtt.client.ui.v2.design.V2Shapes
 import com.csqtt.client.ui.v2.design.V2Sizes
 import com.csqtt.client.ui.v2.design.V2Spacing
 import com.csqtt.client.ui.v2.design.V2Theme
-import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -105,6 +104,7 @@ internal fun V2AppsRoutingDialog(
     val focusManager = LocalFocusManager.current
     val listState = rememberLazyListState()
 
+    var allApps by rememberSaveable { mutableStateOf(!isWhitelist && blacklist.isEmpty()) }
     var modeIsWhitelist by rememberSaveable { mutableStateOf(isWhitelist) }
     var blackSelection by remember { mutableStateOf(blacklist) }
     var whiteSelection by remember { mutableStateOf(whitelist) }
@@ -132,7 +132,7 @@ internal fun V2AppsRoutingDialog(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     fun close() {
-        onClose(blackSelection, whiteSelection, modeIsWhitelist)
+        onClose(if(allApps) emptySet() else blackSelection, whiteSelection, if(allApps) false else modeIsWhitelist)
     }
 
     fun animateClose() {
@@ -192,19 +192,20 @@ internal fun V2AppsRoutingDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(V2Spacing.Sm),
             ) {
+                V2PillButton(text = "Все с VPN", onClick = { allApps = true }, modifier = Modifier.weight(1f), style = if(allApps) V2PillStyle.Accent else V2PillStyle.Outline, height = 40.dp, horizontalPadding = 4.dp)
                 V2PillButton(
-                    text = "Чёрный список",
-                    onClick = { modeIsWhitelist = false },
+                    text = "Без VPN",
+                    onClick = { modeIsWhitelist = false; allApps = false },
                     modifier = Modifier.weight(1f),
-                    style = if (!modeIsWhitelist) V2PillStyle.Accent else V2PillStyle.Outline,
+                    style = if (!modeIsWhitelist && !allApps) V2PillStyle.Accent else V2PillStyle.Outline,
                     height = 40.dp,
                     horizontalPadding = 8.dp,
                 )
                 V2PillButton(
-                    text = "Белый список",
-                    onClick = { modeIsWhitelist = true },
+                    text = "С VPN",
+                    onClick = { modeIsWhitelist = true; allApps = false },
                     modifier = Modifier.weight(1f),
-                    style = if (modeIsWhitelist) V2PillStyle.Accent else V2PillStyle.Outline,
+                    style = if (modeIsWhitelist && !allApps) V2PillStyle.Accent else V2PillStyle.Outline,
                     height = 40.dp,
                     horizontalPadding = 8.dp,
                 )
@@ -273,6 +274,7 @@ internal fun V2AppsRoutingDialog(
             )
 
             when {
+                allApps -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("Все приложения используют VPN", color = colors.textSecondary) }
                 isAppsLoading -> {
                     Box(
                         modifier = Modifier

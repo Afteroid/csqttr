@@ -152,7 +152,7 @@ fun InfoTab(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val currentVersion = remember { "v${BuildConfig.VERSION_NAME.removePrefix("v")}" }
+    val currentVersion = remember { "v${BuildConfig.VERSION_NAME.removePrefix("v").substringBefore('-')}" }
     var isCheckingUpdates by remember { mutableStateOf(false) }
     var pendingManualRelease by remember { mutableStateOf<com.csqtt.client.AppReleaseInfo?>(null) }
     var showCryptoDialog by remember { mutableStateOf(false) }

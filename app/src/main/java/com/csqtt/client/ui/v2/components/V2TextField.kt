@@ -52,15 +52,15 @@ fun V2TextField(
     ) {
         Row(
             modifier = Modifier
-                .heightIn(min = 54.dp)
-                .padding(horizontal = 16.dp, vertical = if (singleLine) 0.dp else 12.dp),
+                .heightIn(min = 44.dp)
+                .padding(horizontal = 12.dp, vertical = if (singleLine) 0.dp else 12.dp),
             verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top,
         ) {
             val defaultTextColor = if (enabled) colors.textPrimary else colors.textMuted
             val resolvedStyle = (textStyle ?: MaterialTheme.typography.bodyLarge.copy(
                 fontFamily = V2BodyFamily,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 15.sp,
+                fontWeight = FontWeight.Normal,
+                fontSize = 14.sp,
             )).copy(color = textColor ?: defaultTextColor)
 
             BasicTextField(

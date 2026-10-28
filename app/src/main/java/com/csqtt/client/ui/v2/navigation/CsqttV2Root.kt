@@ -12,10 +12,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +36,8 @@ import com.csqtt.client.BuildConfig
 import com.csqtt.client.CsqttConstants
 import com.csqtt.client.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
 import com.csqtt.client.SettingsStore
+import com.csqtt.client.DeploySettingsSnapshot
+import com.csqtt.client.SubscriptionSync
 import com.csqtt.client.TunnelManager
 import com.csqtt.client.UPDATE_CHECK_NEVER
 import com.csqtt.client.UPDATE_DIALOG_ACTION_POSTPONED
@@ -58,6 +62,8 @@ import com.csqtt.client.ui.v2.screens.logs.V2LogsScreen
 import com.csqtt.client.ui.v2.screens.routing.V2RoutingScreen
 import com.csqtt.client.ui.v2.screens.settings.V2AboutScreen
 import com.csqtt.client.ui.v2.screens.settings.V2SettingsScreen
+import com.csqtt.client.ui.v2.screens.settings.HappTunnelScreen
+import com.csqtt.client.ui.v2.screens.settings.HappSettingsScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
@@ -86,15 +92,16 @@ fun CsqttV2Root(
         val colors = V2Theme.colors
         val context = LocalContext.current.applicationContext
         val scope = rememberCoroutineScope()
-        val participantMode by settingsStore.csqttLinkMode.collectAsStateWithLifecycle(initialValue = false)
-        val participantShowLogs by settingsStore.participantShowLogs.collectAsStateWithLifecycle(
-            initialValue = false,
-        )
-        val tabs = remember(participantMode, participantShowLogs) {
+        val ownerMode by settingsStore.uiOwnerMode.collectAsStateWithLifecycle(initialValue = false)
+        val deployStore = remember(context) { SettingsStore(context, deployScope = true) }
+        // Keep this store's own snapshot ready, without reviving a saved form from another VPS.
+        val deploySettings by deployStore.deploySettingsSnapshot.collectAsStateWithLifecycle(DeploySettingsSnapshot())
+        val participantShowLogs by settingsStore.participantShowLogs.collectAsStateWithLifecycle(false)
+        val tabs = remember(ownerMode, participantShowLogs) {
             V2Tab.entries.filter { tab ->
                 when (tab) {
-                    V2Tab.Deploy -> !participantMode
-                    V2Tab.Logs -> !participantMode || participantShowLogs
+                    V2Tab.Deploy -> ownerMode
+                    V2Tab.Logs -> ownerMode || participantShowLogs
                     else -> true
                 }
             }
@@ -107,8 +114,8 @@ fun CsqttV2Root(
         var showVersionSheet by rememberSaveable { mutableStateOf(false) }
         var showResourceSheet by rememberSaveable { mutableStateOf(false) }
         var floatingHudEnabled by rememberSaveable { mutableStateOf(false) }
-        val version = remember { "V ${BuildConfig.VERSION_NAME.removePrefix("v")}" }
-        val currentVersion = remember { "v${BuildConfig.VERSION_NAME.removePrefix("v")}" }
+        val version = remember { "V ${BuildConfig.VERSION_NAME.removePrefix("v").substringBefore('-')}" }
+        val currentVersion = remember { "v${BuildConfig.VERSION_NAME.removePrefix("v").substringBefore('-')}" }
         val selectedTab = remember(tabs, selectedTabName) {
             tabs.firstOrNull { it.name == selectedTabName } ?: tabs.first()
         }
@@ -214,7 +221,7 @@ fun CsqttV2Root(
             modifier = modifier
                 .fillMaxSize()
                 .background(colors.background)
-                .windowInsetsPadding(WindowInsets.safeDrawing),
+                .windowInsetsPadding(WindowInsets.systemBars),
         ) {
             AnimatedContent(
                 targetState = overlay,
@@ -235,12 +242,13 @@ fun CsqttV2Root(
                 modifier = Modifier.fillMaxSize(),
             ) { currentOverlay ->
                 when (currentOverlay) {
-                    OVERLAY_SETTINGS -> V2SettingsScreen(
+                    OVERLAY_SETTINGS -> HappSettingsScreen(
                         settingsStore = settingsStore,
                         version = version,
                         onBack = { overlay = null },
                         onAbout = { overlay = OVERLAY_ABOUT },
-                        onVkAuthRequested = onVkAuthRequested,
+                        onOpenResourceMonitor = { showResourceSheet = true },
+                        onVersionClick = { showVersionSheet = true },
                     )
 
                     OVERLAY_ABOUT -> V2AboutScreen(
@@ -249,16 +257,9 @@ fun CsqttV2Root(
                     )
 
                     else -> Column(modifier = Modifier.fillMaxSize()) {
-                        Box(modifier = Modifier.weight(1f)) {
-                            AnimatedContent(
-                                targetState = selectedTab,
-                                transitionSpec = {
-                                    val isForward = targetState.ordinal > initialState.ordinal
-                                    V2Transitions.tabTransition(isForward = isForward)
-                                },
-                                label = "v2_tab_transition",
-                                modifier = Modifier.fillMaxSize(),
-                            ) { tab ->
+                        Box(modifier = Modifier.weight(1f).imePadding()) {
+                            key(selectedTab) {
+                                val tab = selectedTab
                                 tabStateHolder.SaveableStateProvider(key = tab.name) {
                                     when (tab) {
                                         V2Tab.Connection -> V2ConnectionScreen(
@@ -269,10 +270,11 @@ fun CsqttV2Root(
                                             onOpenResourceMonitor = { showResourceSheet = true },
                                             profilePickerRequest = profilePickerRequest,
                                             onInvalidConfiguration = {
-                                                selectedTabName = V2Tab.Connection.name
-                                                profilePickerRequest += 1
+                                                selectedTabName = V2Tab.Tunnel.name
                                             },
                                         )
+
+                                        V2Tab.Tunnel -> HappTunnelScreen(settingsStore, version, { overlay = OVERLAY_SETTINGS }, onVkAuthRequested)
 
                                         V2Tab.Logs -> V2LogsScreen(
                                             version = version,
@@ -281,7 +283,8 @@ fun CsqttV2Root(
                                         )
 
                                         V2Tab.Deploy -> V2DeployScreen(
-                                            settingsStore = settingsStore,
+                                            settingsStore = deployStore,
+                                            savedSettings = deploySettings,
                                             version = version,
                                             onSettings = { overlay = OVERLAY_SETTINGS },
                                             onVersionClick = { showVersionSheet = true },

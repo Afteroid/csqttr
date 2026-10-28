@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,10 +41,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import kotlinx.coroutines.delay
 import com.csqtt.client.ui.v2.design.V2BodyFamily
 import com.csqtt.client.ui.v2.design.V2Shapes
 import com.csqtt.client.ui.v2.design.V2Sizes
@@ -63,13 +69,13 @@ fun V2SettingRow(
         color = colors.bottomSurface,
         shape = V2Shapes.Row,
         borderColor = null,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         onClick = onClick,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 52.dp),
+                .heightIn(min = 40.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -79,7 +85,7 @@ fun V2SettingRow(
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontFamily = V2BodyFamily,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                 ),
                 color = if (enabled) colors.textPrimary else colors.textMuted,
             )
@@ -88,7 +94,7 @@ fun V2SettingRow(
     }
 }
 
-/** Custom sleek matte switch with spring physics */
+/** Stored values appear immediately; only a user toggle animates. */
 @Composable
 fun V2Switch(
     checked: Boolean,
@@ -97,24 +103,31 @@ fun V2Switch(
     enabled: Boolean = true,
 ) {
     val colors = V2Theme.colors
+    val light = colors.background.luminance() > 0.5f
+    var userToggle by remember { mutableStateOf(false) }
+    LaunchedEffect(checked, userToggle) {
+        if (userToggle) { delay(300); userToggle = false }
+    }
     val thumbOffset by animateFloatAsState(
-        targetValue = if (checked) 20f else 0f,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f),
+        targetValue = if (checked) 22f else 0f,
+        animationSpec = if (userToggle) spring(dampingRatio = 0.8f, stiffness = 500f) else androidx.compose.animation.core.snap(),
         label = "v2-switch-thumb",
     )
     val trackColor by animateColorAsState(
+        animationSpec = if (userToggle) androidx.compose.animation.core.tween(180) else androidx.compose.animation.core.snap(),
         targetValue = when {
             !enabled -> colors.field
-            checked -> colors.contrast
-            else -> colors.field
+            checked -> colors.accent
+            else -> if(light) Color(0xFFD9E8FB) else colors.textSecondary.copy(alpha = 0.28f)
         },
         label = "v2-switch-track",
     )
     val thumbColor by animateColorAsState(
+        animationSpec = if (userToggle) androidx.compose.animation.core.tween(180) else androidx.compose.animation.core.snap(),
         targetValue = when {
             !enabled -> colors.textMuted
-            checked -> colors.onContrast
-            else -> colors.textSecondary
+            checked -> Color.White
+            else -> if(light) Color(0xFF709CD1) else colors.textSecondary
         },
         label = "v2-switch-thumb-color",
     )
@@ -125,18 +138,21 @@ fun V2Switch(
             .height(28.dp)
             .clip(V2Shapes.Pill)
             .background(trackColor)
-            .clickable(
+            .border(1.dp, if(checked || light) colors.accent.copy(alpha = 0.65f) else colors.textSecondary.copy(alpha = 0.6f), V2Shapes.Pill)
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 enabled = enabled,
-            ) { onCheckedChange(!checked) }
-            .padding(3.dp),
+            ) { userToggle = true; onCheckedChange(it) }
+            .padding(4.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
         Box(
             modifier = Modifier
                 .offset(x = thumbOffset.dp)
-                .size(22.dp)
+                .size(18.dp)
                 .clip(CircleShape)
                 .background(thumbColor),
         )
@@ -152,7 +168,7 @@ fun V2SwitchSetting(
     enabled: Boolean = true,
     onInfoClick: (() -> Unit)? = null,
 ) {
-    V2SettingRow(title = title, modifier = modifier, enabled = enabled) {
+    V2SettingRow(title = title, modifier = modifier, enabled = enabled, onClick = { if(enabled) onCheckedChange(!checked) }) {
         if (onInfoClick != null) {
             V2SquareIconButton(
                 icon = Icons.AutoMirrored.Filled.HelpOutline,

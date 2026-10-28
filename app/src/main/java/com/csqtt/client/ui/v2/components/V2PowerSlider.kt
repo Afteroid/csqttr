@@ -26,7 +26,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -49,6 +52,7 @@ fun V2PowerSlider(
     onInfo: (() -> Unit)? = null,
     fixedWorkers: Int? = null,
     modifier: Modifier = Modifier,
+    showHeader: Boolean = true,
 ) {
     val colors = V2Theme.colors
     val haptic = LocalHapticFeedback.current
@@ -78,19 +82,19 @@ fun V2PowerSlider(
 
     var isInteracting by remember { mutableStateOf(false) }
 
-    // Smooth fluid animation when value snaps or changes
+    // Loading a saved profile is immediate; animate only an ongoing gesture.
     val animatedValue by animateFloatAsState(
         targetValue = if (isFixed) fixedWorkers.toFloat() else localValue,
-        animationSpec = spring(
+        animationSpec = if (isInteracting) spring(
             dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = if (isInteracting) 1400f else Spring.StiffnessMediumLow,
-        ),
+        ) else androidx.compose.animation.core.snap(),
         label = "power_slider_val",
     )
 
     // Tactile thumb expansion on interaction
     val thumbRadiusDp by animateDpAsState(
-        targetValue = if (isInteracting) 12.dp else 10.dp,
+        targetValue = if (isInteracting) 8.dp else 6.dp,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessMedium,
@@ -100,34 +104,31 @@ fun V2PowerSlider(
 
     val currentOnValueChange by rememberUpdatedState(onValueChange)
 
-    val baseThumbRadiusPx = with(density) { 10.dp.toPx() }
-    val trackHeightPx = with(density) { 9.dp.toPx() }
-    val dotRadiusPx = with(density) { 2.dp.toPx() }
-
-    val trackColor = Color(0xFF33383F)
-    val activeTrackColor = colors.accent
-    val dotInactiveColor = Color(0xFF203537)
-    val dotActiveColor = Color(0xFF141F24)
-    val thumbColor = Color(0xFFD9D9D9)
+    val baseThumbRadiusPx = with(density) { 8.dp.toPx() }
+    val trackHeightPx = with(density) { 4.dp.toPx() }
+    val light = colors.background.luminance() > 0.5f
+    val trackColor = if(light) Color(0xFF8EB6E8) else colors.textSecondary.copy(alpha = 0.7f)
+    val activeTrackColor = if(light) colors.accent else Color(0xFF599BEE)
+    val thumbColor = if(light) colors.accent else colors.textPrimary
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         // Header row: "Мощность" + "50 потоков"
-        Row(
+        if (showHeader) Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (isFixed) "Мощность (лимит)" else "Мощность",
+                text = if (isFixed) "Потоки (лимит)" else "Потоки",
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontFamily = V2DisplayFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                 ),
-                color = colors.textPrimary,
+                color = colors.accent,
                 modifier = if (onInfo != null) {
                     Modifier.clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -146,7 +147,7 @@ fun V2PowerSlider(
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                 ),
-                color = colors.textPrimary,
+                color = colors.accent,
             )
         }
 
@@ -239,25 +240,14 @@ fun V2PowerSlider(
                 )
             }
 
-            // 3. Draw discrete step dots along track
-            validSteps.forEach { step ->
-                val fraction = ((step - minStep) / range).coerceIn(0f, 1f)
-                val dotX = left + (right - left) * fraction
-                val isFilled = dotX <= thumbX
-                val dotC = if (isFilled) dotActiveColor else dotInactiveColor
-                drawCircle(
-                    color = dotC,
-                    radius = dotRadiusPx,
-                    center = Offset(dotX, centerY),
-                )
-            }
-
             // 4. Draw thumb handle with animated scale
-            val currentThumbRadiusPx = with(density) { thumbRadiusDp.toPx() }
-            drawCircle(
+            val handleWidth = with(density) { thumbRadiusDp.toPx() }
+            val handleHeight = with(density) { 20.dp.toPx() }
+            drawRoundRect(
                 color = if (enabled) thumbColor else thumbColor.copy(alpha = 0.5f),
-                radius = currentThumbRadiusPx,
-                center = Offset(thumbX, centerY),
+                topLeft = Offset(thumbX - handleWidth / 2, centerY - handleHeight / 2),
+                size = Size(handleWidth, handleHeight),
+                cornerRadius = CornerRadius(handleWidth / 2),
             )
         }
     }
