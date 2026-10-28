@@ -18,6 +18,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +49,12 @@ fun HashesDialog(
     onCheck: suspend (List<String>) -> Map<String, VkHashValidationStatus>,
     onAutoSave: ((String, String, String, String, String, String) -> Unit)? = null,
     onSave: (String, String, String, String, String, String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // A participant's link hashes: used first, never shown (they are the owner's), each can be checked, taken out or
+    // replaced by one of the participant's own (taken out, then the first free field below takes the new one)
+    ownerHashes: List<String> = emptyList(),
+    removedOwnerHashes: Set<String> = emptySet(),
+    onRemovedOwnerHashesChange: (Set<String>) -> Unit = {},
 ) {
     var h1 by rememberSaveable { mutableStateOf(hash1) }
     var h2 by rememberSaveable { mutableStateOf(hash2) }
@@ -56,11 +63,21 @@ fun HashesDialog(
     var h5 by rememberSaveable { mutableStateOf(hash5) }
     var h6 by rememberSaveable { mutableStateOf(hash6) }
     var results by remember(validationResults) { mutableStateOf(validationResults) }
+    var removedOwner by remember(removedOwnerHashes) { mutableStateOf(removedOwnerHashes) }
+    val fieldFocus = remember { List(6) { FocusRequester() } }
+
     var isChecking by remember { mutableStateOf(false) }
     var unavailableCount by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val hashes = listOf(h1, h2, h3, h4, h5, h6)
+
+    // the tunnel takes at most MAX_VK_HASHES, the owner's first: say when the participant's own would be cut
+    val ownerInUse = ownerHashes.count { it !in removedOwner }
+    val ownFilled = hashes.count { it.trim().length >= 16 }
+    val overLimit = ownerHashes.isNotEmpty() &&
+        ownerInUse + ownFilled > com.csqtt.client.CsqttConstants.Tunnel.MAX_VK_HASHES
+    var replaceNote by remember { mutableStateOf(false) }
     val validBorder = if (isSystemInDarkTheme()) Color(0xFF66BB6A) else Color(0xFF2E7D32)
 
     fun updateHash(index: Int, raw: String) {
@@ -149,8 +166,99 @@ fun HashesDialog(
                     lineHeight = 15.sp,
                 )
 
+                if (ownerHashes.isNotEmpty()) {
+                    Text(
+                        "От владельца сервера",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    ownerHashes.forEachIndexed { idx, ownerHash ->
+                        val removed = ownerHash in removedOwner
+                        val status = results[ownerHash]
+                        fun setRemoved(value: Boolean) {
+                            removedOwner = if (value) removedOwner + ownerHash else removedOwner - ownerHash
+                            onRemovedOwnerHashesChange(removedOwner)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "От владельца ${idx + 1}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (removed) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    when {
+                                        removed -> "убран"
+                                        status == VkHashValidationStatus.Valid -> "работает"
+                                        status == VkHashValidationStatus.Invalid -> "не работает"
+                                        else -> "не проверен"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = when {
+                                        removed -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        status == VkHashValidationStatus.Valid -> validBorder
+                                        status == VkHashValidationStatus.Invalid -> MaterialTheme.colorScheme.error
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                            }
+                            if (removed) {
+                                TextButton(onClick = { setRemoved(false) }, enabled = !isChecking) { Text("Вернуть") }
+                            } else {
+                                TextButton(
+                                    onClick = {
+                                        setRemoved(true)
+                                        val free = hashes.indexOfFirst { it.isBlank() }
+                                        replaceNote = free < 0
+                                        if (free >= 0) runCatching { fieldFocus[free].requestFocus() }
+                                    },
+                                    enabled = !isChecking,
+                                ) { Text("Заменить") }
+                                IconButton(
+                                    onClick = { setRemoved(true) },
+                                    enabled = !isChecking,
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Убрать хеш владельца ${idx + 1}",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Text(
+                        "Свои хеши",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    if (replaceNote) {
+                        Text(
+                            "Свободных полей нет: очистите один из своих хешей и вставьте новый",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (overLimit) {
+                        Text(
+                            "Используются первые ${com.csqtt.client.CsqttConstants.Tunnel.MAX_VK_HASHES} хешей: сначала " +
+                                "владельца, потом ваши. Чтобы работали все ваши, уберите часть хешей владельца.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 15.sp,
+                        )
+                    }
+                }
+
                 hashes.forEachIndexed { idx, value ->
-                    val label = if (idx == 0) "VK Хеш 1 *" else "VK Хеш ${idx + 1}"
+                    // with the owner's hashes the participant's own are optional
+                    val label = if (idx == 0 && ownerHashes.isEmpty()) "VK Хеш 1 *" else "VK Хеш ${idx + 1}"
                     val isShort = value.isNotBlank() && value.length < 16
                     val status = results[value]
                     val isInvalid = status == VkHashValidationStatus.Invalid
@@ -222,13 +330,15 @@ fun HashesDialog(
                                 }
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().focusRequester(fieldFocus[idx]),
                         shape = CsqttShapes.Control,
                         colors = fieldColors,
                     )
                 }
 
-                val activeHashes = hashes.map(String::trim).filter { it.length >= 16 }.distinct()
+                // the check covers the owner's hashes still in use too (their status shows above, never the hash)
+                val activeHashes = (ownerHashes.filterNot { it in removedOwner } + hashes.map(String::trim))
+                    .filter { it.length >= 16 }.distinct()
                 OutlinedButton(
                     onClick = {
                         isChecking = true
@@ -243,7 +353,7 @@ fun HashesDialog(
                         }
                     },
                     modifier = Modifier.fillMaxWidth().height(CsqttSizes.ControlHeight),
-                    enabled = !isChecking && hashes.any { it.isNotBlank() },
+                    enabled = !isChecking && activeHashes.isNotEmpty(),
                     shape = CsqttShapes.Pill,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),

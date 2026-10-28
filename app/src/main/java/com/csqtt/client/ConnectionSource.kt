@@ -13,6 +13,11 @@ data class ConnectionSource(
     val tokenFromLink: Boolean,
 )
 
+/** A participant's hashes: the owner's from the link minus the ones taken out, then the participant's own. */
+internal fun participantHashes(linkHashes: List<String>, removed: Set<String>, ownHashes: String): String =
+    (linkHashes.filterNot { it in removed } + ownHashes.split(Regex("[,\\s\\n]+")))
+        .map(String::trim).filter(String::isNotEmpty).distinct().joinToString(",")
+
 suspend fun resolveConnectionSource(store: SettingsStore): ConnectionSource? {
     val invalidHashes = VkHashValidationCodec.decode(store.vkHashCheckResults.first())
     fun activeHashes(raw: String): String {
@@ -23,18 +28,22 @@ suspend fun resolveConnectionSource(store: SettingsStore): ConnectionSource? {
 
     if (store.csqttLinkMode.first()) {
         val link = parseCsqttLink(store.csqttLink.first()) ?: return null
-        val linkHashes = activeHashes(link.hashes.joinToString(","))
+        TunnelManager.ownerHashes = link.hashes
+        val removed = store.linkHashesRemoved.first()
         val tokenFromLink = link.vkAccessToken.isNotEmpty()
         return ConnectionSource(
             peer = link.peerAddress(),
             password = link.password,
-            hashes = if (tokenFromLink) "" else linkHashes.ifEmpty { activeHashes(store.vkHashes.first()) },
-            hashesFromLink = linkHashes.isNotEmpty(),
+            hashes = if (tokenFromLink) "" else activeHashes(participantHashes(link.hashes, removed, store.vkHashes.first())),
+            // a link with hashes hides the hash mode, so the participant's list (the owner's kept + their own) is used as
+            // is — even with every owner hash taken out — never through a stored hash mode they cannot see
+            hashesFromLink = link.hashes.isNotEmpty(),
             vkAccessToken = link.vkAccessToken,
             tokenFromLink = tokenFromLink,
         )
     }
 
+    TunnelManager.ownerHashes = emptyList()
     val basePeer = store.peer.first()
     val passwordState = store.connectionPasswordState.first()
     val password = passwordState.value
