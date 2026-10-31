@@ -16,6 +16,7 @@ import com.csqtt.client.SettingsStore
 import com.csqtt.client.BatterySaver
 import com.csqtt.client.ui.v2.components.*
 import com.csqtt.client.ui.v2.dialogs.V2ImportExportDialog
+import com.csqtt.client.ui.v2.dialogs.V2WifiNetworkListDialog
 import kotlinx.coroutines.launch
 
 @Composable
@@ -27,6 +28,8 @@ fun HappSettingsScreen(
     val owner by settingsStore.uiOwnerMode.collectAsStateWithLifecycle(false)
     val extra by settingsStore.extraWorkers.collectAsStateWithLifecycle(false)
     val wifi by settingsStore.autoPauseOnWifi.collectAsStateWithLifecycle(false)
+    val wifiMode by settingsStore.wifiNetworkListMode.collectAsStateWithLifecycle("whitelist")
+    val wifiSsids by settingsStore.wifiNetworkListSsids.collectAsStateWithLifecycle("")
     val logs by settingsStore.loggingEnabled.collectAsStateWithLifecycle(true)
     val showLogs by settingsStore.participantShowLogs.collectAsStateWithLifecycle(false)
     val profile by settingsStore.activeProfile.collectAsStateWithLifecycle(0)
@@ -38,6 +41,7 @@ fun HappSettingsScreen(
     val batteryMode by settingsStore.batterySaverMode.collectAsStateWithLifecycle(BatterySaver.DEFAULT_MODE)
     val batteryPercent by settingsStore.batterySaverPercent.collectAsStateWithLifecycle(BatterySaver.DEFAULT_PERCENT)
     var transfer by remember { mutableStateOf(false) }
+    var wifiLists by remember { mutableStateOf(false) }
     var logsHelp by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         V2TopBar(title = "Настройки", onBack = onBack)
@@ -63,6 +67,12 @@ fun HappSettingsScreen(
             V2Card(contentPadding = PaddingValues(12.dp)) {
                 if (authMode != "auto_js") V2SwitchSetting("Экстра потоки", extra, { scope.launch { settingsStore.saveExtraWorkers(it, forProfile = profile) } }, enabled = !running)
                 V2SwitchSetting("Автопауза Wi-Fi", wifi, { scope.launch { settingsStore.saveAutoPauseOnWifi(it) } })
+                HappActionRow(
+                    "Wi-Fi списки",
+                    detail = "${if (wifiMode == "blacklist") "Чёрный" else "Белый"} · ${com.csqtt.client.decodeWifiSsids(wifiSsids).size}",
+                    onClick = { wifiLists = true },
+                    compact = true,
+                )
                 V2SwitchSetting("Ведение логов", logs, { value ->
                     com.csqtt.client.TunnelManager.isLoggingEnabled = value
                     scope.launch { settingsStore.saveLoggingEnabled(value) }
@@ -92,6 +102,7 @@ fun HappSettingsScreen(
         }
     }
     if (transfer) V2ImportExportDialog(settingsStore, { transfer = false })
+    if (wifiLists) V2WifiNetworkListDialog(settingsStore, { wifiLists = false })
     if (logsHelp) AlertDialog(onDismissRequest = { logsHelp = false },
         title = { Text("Вкладка «Логи»") },
         text = { Text("У участника вкладку можно скрыть. Настройка сохраняется для текущего профиля и действует в обоих дизайнах. Запись событий отдельно управляется переключателем «Ведение логов».") },

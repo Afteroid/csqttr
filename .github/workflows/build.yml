@@ -1,0 +1,674 @@
+name: Build and Release Rust Client
+
+on:
+  push:
+    branches: [ release-2.5.2 ]
+  pull_request:
+    branches: [ release-2.5.2 ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+  checks: read
+  deployments: read
+  issues: read
+  packages: read
+  pull-requests: read
+  repository-projects: read
+  security-events: read
+  statuses: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  WORKING_DIR: rust-client
+  # ios-core лежит РЯДОМ с rust-client (csqttr-core/ios-core), shared/ тоже рядом.
+  # Поэтому сборка идёт прямо из ios-core, а patch-пути в его Cargo.toml —
+  # ../rust-client/vendor/... и ../shared/... — резолвятся корректно.
+  IOS_WORKING_DIR: ios-core
+  NDK_VERSION: r26d
+  ANDROID_PLATFORM: 26
+
+jobs:
+  # ============= CHECK =============
+  check:
+    name: Check (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-check-
+      - name: Cargo check
+        run: cargo check --release
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Compile CLI regression tests
+        run: cargo test --release --no-run
+        working-directory: ${{ env.WORKING_DIR }}
+
+  # ============= CHECK ios-core =============
+  check-ios-core:
+    name: Check ios-core (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-check-ios-core-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-check-ios-core-
+      - name: Cargo check (ios-core staticlib)
+        run: cargo check --release
+        working-directory: ${{ env.IOS_WORKING_DIR }}
+
+  # ============= LINUX x86_64 =============
+  build-linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-linux-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-linux-
+      - name: Build
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-linux-x86_64
+          path: ${{ env.WORKING_DIR }}/target/x86_64-unknown-linux-gnu/release/client
+
+  # ============= LINUX ARM64 =============
+  build-linux-arm64:
+    name: Linux ARM64
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-linux-arm64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-linux-arm64-
+      - name: Configure linker
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+      - name: Build
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-linux-arm64
+          path: ${{ env.WORKING_DIR }}/target/aarch64-unknown-linux-gnu/release/client
+
+  # ============= LINUX ARMv7 =============
+  build-linux-armv7:
+    name: Linux ARMv7
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Install cross-compilation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-linux-armv7-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-linux-armv7-
+      - name: Configure linker
+        run: |
+          echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+          echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+          echo "CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++" >> $GITHUB_ENV
+      - name: Build
+        run: cargo build --release --target armv7-unknown-linux-gnueabihf
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-linux-armv7
+          path: ${{ env.WORKING_DIR }}/target/armv7-unknown-linux-gnueabihf/release/client
+
+  # ============= LINUX i686 =============
+  build-linux-i686:
+    name: Linux i686
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: i686-unknown-linux-gnu
+
+      - name: Install cross-compilation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-linux-i686-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-linux-i686-
+      - name: Configure linker
+        run: |
+          echo "CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc" >> $GITHUB_ENV
+          echo "CC_i686_unknown_linux_gnu=gcc" >> $GITHUB_ENV
+          echo "CXX_i686_unknown_linux_gnu=g++" >> $GITHUB_ENV
+      - name: Build
+        run: cargo build --release --target i686-unknown-linux-gnu
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-linux-i686
+          path: ${{ env.WORKING_DIR }}/target/i686-unknown-linux-gnu/release/client
+
+  # ============= WINDOWS =============
+  build-windows:
+    name: Windows
+    runs-on: windows-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-windows-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-windows-
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-windows-x86_64
+          path: ${{ env.WORKING_DIR }}/target/x86_64-pc-windows-msvc/release/client.exe
+
+  # ============= MACOS =============
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: x86_64-apple-darwin
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-macos-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-macos-
+      - name: Build
+        run: cargo build --release --target x86_64-apple-darwin
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-macos-x86_64
+          path: ${{ env.WORKING_DIR }}/target/x86_64-apple-darwin/release/client
+
+  # ============= ANDROID (arm64-v8a) =============
+  build-android-arm64:
+    name: Android arm64-v8a
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: false
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-android-arm64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-android-arm64-
+      - name: Build for Android arm64-v8a
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo ndk --target aarch64-linux-android --platform ${{ env.ANDROID_PLATFORM }} build --release
+          mkdir -p ../android-libs/arm64-v8a
+          cp target/aarch64-linux-android/release/client ../android-libs/arm64-v8a/libclient.so
+          chmod +x ../android-libs/arm64-v8a/libclient.so
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-v8a
+          path: android-libs/arm64-v8a/libclient.so
+
+  # ============= ANDROID (armeabi-v7a) =============
+  build-android-armv7:
+    name: Android armeabi-v7a
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: armv7-linux-androideabi
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: false
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-android-armv7-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-android-armv7-
+      - name: Build for Android armeabi-v7a
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo ndk --target armv7-linux-androideabi --platform ${{ env.ANDROID_PLATFORM }} build --release
+          mkdir -p ../android-libs/armeabi-v7a
+          cp target/armv7-linux-androideabi/release/client ../android-libs/armeabi-v7a/libclient.so
+          chmod +x ../android-libs/armeabi-v7a/libclient.so
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-armeabi-v7a
+          path: android-libs/armeabi-v7a/libclient.so
+
+  # ============= ANDROID (x86_64) =============
+  build-android-x86_64:
+    name: Android x86_64
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: false
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-android-x86_64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-android-x86_64-
+      - name: Build for Android x86_64
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo ndk --target x86_64-linux-android --platform ${{ env.ANDROID_PLATFORM }} build --release
+          mkdir -p ../android-libs/x86_64
+          cp target/x86_64-linux-android/release/client ../android-libs/x86_64/libclient.so
+          chmod +x ../android-libs/x86_64/libclient.so
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-x86_64
+          path: android-libs/x86_64/libclient.so
+
+  # ============= iOS SIMULATOR (x86_64) =============
+  # Собираем ios-core НА ЕГО МЕСТЕ (csqttr-core/ios-core), без копирования в rust-client.
+  # Patch-пути в ios-core/Cargo.toml (../rust-client/vendor/...) из ios-core/ резолвятся
+  # в csqttr-core/rust-client/vendor/... — это правильно.
+  build-ios-simulator:
+    name: iOS Simulator (x86_64) - staticlib
+    runs-on: macos-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: x86_64-apple-ios
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-ios-sim-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ios-sim-
+      - name: Build for iOS Simulator
+        run: cargo build --release --target x86_64-apple-ios
+        working-directory: ${{ env.IOS_WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libcsqttr_ios_simulator_x86_64
+          path: ${{ env.IOS_WORKING_DIR }}/target/x86_64-apple-ios/release/libcsqttr_ios_core.a
+
+  # ============= iOS DEVICE (aarch64) =============
+  build-ios-device:
+    name: iOS Device (aarch64) - staticlib
+    runs-on: macos-latest
+    needs: [check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          profile: minimal
+          targets: aarch64-apple-ios
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-ios-dev-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ios-dev-
+      - name: Build for iOS Device
+        run: cargo build --release --target aarch64-apple-ios
+        working-directory: ${{ env.IOS_WORKING_DIR }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libcsqttr_ios_device_aarch64
+          path: ${{ env.IOS_WORKING_DIR }}/target/aarch64-apple-ios/release/libcsqttr_ios_core.a
+
+  # ============= iOS UNIVERSAL (Fat Binary) =============
+  build-ios-universal:
+    name: iOS Universal (Fat Binary)
+    runs-on: macos-latest
+    needs: [build-ios-simulator, build-ios-device]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download simulator artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libcsqttr_ios_simulator_x86_64
+          path: ios-artifacts/simulator
+
+      - name: Download device artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libcsqttr_ios_device_aarch64
+          path: ios-artifacts/device
+
+      - name: Create universal binary
+        run: |
+          mkdir -p ios-artifacts/universal
+          lipo -create \
+            ios-artifacts/simulator/libcsqttr_ios_core.a \
+            ios-artifacts/device/libcsqttr_ios_core.a \
+            -output ios-artifacts/universal/libcsqttr_ios_core.a
+          file ios-artifacts/universal/libcsqttr_ios_core.a
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libcsqttr_ios_universal
+          path: ios-artifacts/universal/libcsqttr_ios_core.a
+
+  # ============= UPLOAD ASSETS TO RELEASE =============
+  upload-assets:
+    name: Upload Assets to Release
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-linux-arm64
+      - build-linux-armv7
+      - build-linux-i686
+      - build-windows
+      - build-macos
+      - build-android-arm64
+      - build-android-armv7
+      - build-android-x86_64
+      - build-ios-universal
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release tag
+        id: get_tag
+        run: |
+          echo "RELEASE_TAG=$(date +'%Y.%m.%d.%H.%M')" >> $GITHUB_OUTPUT
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_tag.outputs.RELEASE_TAG }}
+          name: Release ${{ steps.get_tag.outputs.RELEASE_TAG }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare assets
+        run: |
+          mkdir -p release-assets
+          cp artifacts/client-linux-x86_64/client release-assets/client-linux-x86_64
+          cp artifacts/client-linux-arm64/client release-assets/client-linux-arm64
+          cp artifacts/client-linux-armv7/client release-assets/client-linux-armv7
+          cp artifacts/client-linux-i686/client release-assets/client-linux-i686
+          cp artifacts/client-windows-x86_64/client.exe release-assets/client-windows-x86_64.exe
+          cp artifacts/client-macos-x86_64/client release-assets/client-macos-x86_64
+          cp artifacts/libcsqttr_ios_universal/libcsqttr_ios_core.a release-assets/libcsqttr_ios_core.a
+          cp artifacts/android-arm64-v8a/libclient.so release-assets/libclient-android-arm64-v8a.so
+          cp artifacts/android-armeabi-v7a/libclient.so release-assets/libclient-android-armeabi-v7a.so
+          cp artifacts/android-x86_64/libclient.so release-assets/libclient-android-x86_64.so
+          chmod +x release-assets/client-linux-x86_64 || true
+          chmod +x release-assets/client-linux-arm64 || true
+          chmod +x release-assets/client-linux-armv7 || true
+          chmod +x release-assets/client-linux-i686 || true
+          chmod +x release-assets/client-macos-x86_64 || true
+      - name: Upload assets to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_tag.outputs.RELEASE_TAG }}
+          files: release-assets/*
+          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update LATEST file (only on manual trigger)
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "${{ steps.get_tag.outputs.RELEASE_TAG }}" > LATEST
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add LATEST
+          git commit -m "Update LATEST to ${{ steps.get_tag.outputs.RELEASE_TAG }} [skip ci]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

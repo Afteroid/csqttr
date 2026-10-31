@@ -82,7 +82,14 @@ fun FloatingToolbar(
     var showSupportDeveloperDialog by rememberSaveable { mutableStateOf(false) }
     var showImportExportDialog by rememberSaveable { mutableStateOf(false) }
     var showAutoPauseInfo by rememberSaveable { mutableStateOf(false) }
+    var showWifiNetworkListDialog by rememberSaveable { mutableStateOf(false) }
     var showBatterySaverInfo by rememberSaveable { mutableStateOf(false) }
+    val wifiNetworkListMode by settingsStore.wifiNetworkListMode.collectAsStateWithLifecycle(
+        initialValue = "whitelist",
+    )
+    val wifiNetworkListSsids by settingsStore.wifiNetworkListSsids.collectAsStateWithLifecycle(
+        initialValue = "",
+    )
     val batterySaverMode by settingsStore.batterySaverMode.collectAsStateWithLifecycle(
         initialValue = BatterySaver.DEFAULT_MODE,
     )
@@ -345,6 +352,15 @@ fun FloatingToolbar(
                         infoContentDescription = "Как работает автопауза при Wi-Fi",
                     )
 
+                    OutlinedButton(
+                        onClick = { showWifiNetworkListDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        val modeLabel = if (wifiNetworkListMode == "blacklist") "Чёрный список" else "Белый список"
+                        val count = com.csqtt.client.decodeWifiSsids(wifiNetworkListSsids).size
+                        Text("Wi-Fi списки · $modeLabel · $count")
+                    }
+
                     CompactDropdownSetting(
                         title = BatterySaver.TITLE,
                         selectedKey = batterySaverMode,
@@ -416,6 +432,13 @@ fun FloatingToolbar(
 
     if (showAutoPauseInfo) {
         WifiAutoPauseInfoDialog(onDismiss = { showAutoPauseInfo = false })
+    }
+
+    if (showWifiNetworkListDialog) {
+        WifiNetworkListDialog(
+            settingsStore = settingsStore,
+            onDismiss = { showWifiNetworkListDialog = false },
+        )
     }
 
     if (showTurnSubnetsDialog) {
