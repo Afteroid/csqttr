@@ -285,6 +285,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         private val BATTERY_OPTIMIZATION_PROMPT_HANDLED =
             booleanPreferencesKey("battery_optimization_prompt_handled")
         private val AUTO_PAUSE_ON_WIFI = booleanPreferencesKey("auto_pause_on_wifi")
+        private val WIFI_NETWORK_LIST_MODE = stringPreferencesKey("wifi_network_list_mode")
+        private val WIFI_NETWORK_LIST_SSIDS = stringPreferencesKey("wifi_network_list_ssids")
         private val DOMAIN_ROUTING_ENABLED = booleanPreferencesKey("domain_routing_enabled")
         private val DOMAIN_IS_WHITELIST = booleanPreferencesKey("domain_is_whitelist")
         private val EXCLUDE_RU_ZONES_ENABLED = booleanPreferencesKey("exclude_ru_zones_enabled")
@@ -1288,6 +1290,12 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
     val autoPauseOnWifi: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[AUTO_PAUSE_ON_WIFI] ?: false
     }
+    val wifiNetworkListMode: Flow<String> = dataStore.data.map { prefs ->
+        WifiNetworkListMode.fromStored(prefs[WIFI_NETWORK_LIST_MODE]).storedValue
+    }
+    val wifiNetworkListSsids: Flow<String> = dataStore.data.map { prefs ->
+        prefs[WIFI_NETWORK_LIST_SSIDS] ?: ""
+    }
     suspend fun isBatteryOptimizationPromptHandled(): Boolean =
         dataStore.data.first()[BATTERY_OPTIMIZATION_PROMPT_HANDLED] ?: false
 
@@ -2142,6 +2150,22 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         }
     }
 
+    suspend fun saveWifiNetworkListMode(mode: String) {
+        dataStore.edit { prefs ->
+            prefs[WIFI_NETWORK_LIST_MODE] = WifiNetworkListMode.fromStored(mode).storedValue
+        }
+    }
+
+    suspend fun saveWifiNetworkListSsids(ssids: Collection<String>) {
+        dataStore.edit { prefs ->
+            prefs[WIFI_NETWORK_LIST_SSIDS] = encodeWifiSsids(ssids)
+        }
+    }
+
+    suspend fun saveWifiNetworkListSsids(raw: String) {
+        saveWifiNetworkListSsids(decodeWifiSsids(raw))
+    }
+
 
 
     suspend fun markBatteryOptimizationPromptHandled() {
@@ -2661,6 +2685,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             settings.put("is_dynamic_color", prefs[IS_DYNAMIC_COLOR] ?: false)
             settings.put("theme_palette", prefs[THEME_PALETTE] ?: "pure_black")
             settings.put("auto_pause_on_wifi", prefs[AUTO_PAUSE_ON_WIFI] ?: false)
+            settings.put("wifi_network_list_mode", WifiNetworkListMode.fromStored(prefs[WIFI_NETWORK_LIST_MODE]).storedValue)
+            settings.put("wifi_network_list_ssids", prefs[WIFI_NETWORK_LIST_SSIDS] ?: "")
             settings.put("selected_fingerprint", prefs[getProfileKey(SELECTED_FINGERPRINT, p)] ?: "chrome")
             settings.put("selected_turn_subnet", prefs[getProfileKey(SELECTED_TURN_SUBNET, p)] ?: "")
             settings.put("turn_subnet_ip_limit", prefs[getProfileKey(TURN_SUBNET_IP_LIMIT, p)] ?: "ALL")
@@ -2755,6 +2781,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                     if (s.has("is_dynamic_color")) mutable[IS_DYNAMIC_COLOR] = s.getBoolean("is_dynamic_color")
                     if (s.has("theme_palette")) mutable[THEME_PALETTE] = s.getString("theme_palette")
                     if (s.has("auto_pause_on_wifi")) mutable[AUTO_PAUSE_ON_WIFI] = s.getBoolean("auto_pause_on_wifi")
+                    if (s.has("wifi_network_list_mode")) mutable[WIFI_NETWORK_LIST_MODE] = WifiNetworkListMode.fromStored(s.getString("wifi_network_list_mode")).storedValue
+                    if (s.has("wifi_network_list_ssids")) mutable[WIFI_NETWORK_LIST_SSIDS] = encodeWifiSsids(decodeWifiSsids(s.getString("wifi_network_list_ssids")))
                     if (s.has("selected_fingerprint")) mutable[getProfileKey(SELECTED_FINGERPRINT, p)] = s.getString("selected_fingerprint")
                     if (s.has("selected_turn_subnet")) mutable[getProfileKey(SELECTED_TURN_SUBNET, p)] = s.getString("selected_turn_subnet")
                     if (s.has("turn_subnet_ip_limit")) mutable[getProfileKey(TURN_SUBNET_IP_LIMIT, p)] = s.getString("turn_subnet_ip_limit")

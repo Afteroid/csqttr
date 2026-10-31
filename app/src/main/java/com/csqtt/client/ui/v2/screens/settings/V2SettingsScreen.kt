@@ -9,6 +9,7 @@ import com.csqtt.client.ui.v2.dialogs.V2TcpTransportRiskDialog
 import com.csqtt.client.ui.v2.dialogs.V2TurnTransportInfoDialog
 import com.csqtt.client.ui.v2.dialogs.V2VkTokenRevokeDialog
 import com.csqtt.client.ui.v2.dialogs.V2WifiAutoPauseInfoDialog
+import com.csqtt.client.ui.v2.dialogs.V2WifiNetworkListDialog
 import com.csqtt.client.ui.v2.dialogs.V2WorkModeInfoDialog
 
 import android.content.ClipData
@@ -138,6 +139,8 @@ fun V2SettingsScreen(
     val loggingEnabled by settingsStore.loggingEnabled.collectAsStateWithLifecycle(initialValue = true)
     val themeMode by settingsStore.themeMode.collectAsStateWithLifecycle(initialValue = CsqttConstants.Theme.MODE_SYSTEM)
     val autoPauseOnWifi by settingsStore.autoPauseOnWifi.collectAsStateWithLifecycle(initialValue = false)
+    val wifiNetworkListMode by settingsStore.wifiNetworkListMode.collectAsStateWithLifecycle(initialValue = "whitelist")
+    val wifiNetworkListSsids by settingsStore.wifiNetworkListSsids.collectAsStateWithLifecycle(initialValue = "")
     val participantShowLogs by settingsStore.participantShowLogs.collectAsStateWithLifecycle(initialValue = false)
     val extraWorkers by settingsStore.extraWorkers.collectAsStateWithLifecycle(
         initialValue = SettingsStore.cachedExtraWorkers ?: false,
@@ -171,6 +174,7 @@ fun V2SettingsScreen(
     var showTurnTransportGeneralDialog by rememberSaveable { mutableStateOf(false) }
     var showTurnTransportDetailDialog by rememberSaveable { mutableStateOf<String?>(null) }
     var showAutoPauseInfoDialog by rememberSaveable { mutableStateOf(false) }
+    var showWifiNetworkListDialog by rememberSaveable { mutableStateOf(false) }
     var showBatterySaverInfoDialog by rememberSaveable { mutableStateOf(false) }
     val batterySaverMode by settingsStore.batterySaverMode.collectAsStateWithLifecycle(
         initialValue = com.csqtt.client.BatterySaver.DEFAULT_MODE,
@@ -790,6 +794,14 @@ fun V2SettingsScreen(
                 onInfoClick = { showAutoPauseInfoDialog = true },
             )
 
+            val wifiListCount = com.csqtt.client.decodeWifiSsids(wifiNetworkListSsids).size
+            val wifiListLabel = if (wifiNetworkListMode == "blacklist") "Чёрный" else "Белый"
+            V2ActionSetting(
+                title = "Wi-Fi списки",
+                action = "$wifiListLabel · $wifiListCount",
+                onAction = { showWifiNetworkListDialog = true },
+            )
+
             val saverModes = com.csqtt.client.BatterySaver.MODES
             V2DropdownSetting(
                 title = com.csqtt.client.BatterySaver.TITLE,
@@ -987,6 +999,12 @@ fun V2SettingsScreen(
 
     if (showAutoPauseInfoDialog) {
         V2WifiAutoPauseInfoDialog(onDismiss = { showAutoPauseInfoDialog = false })
+    }
+    if (showWifiNetworkListDialog) {
+        V2WifiNetworkListDialog(
+            settingsStore = settingsStore,
+            onDismiss = { showWifiNetworkListDialog = false },
+        )
     }
     if (showExtraWorkersInfoDialog) {
         V2ExtraWorkersInfoDialog(onDismiss = { showExtraWorkersInfoDialog = false })
