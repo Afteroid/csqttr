@@ -1,4 +1,4 @@
-е<div align="center">
+<div align="center">
 
 # CSQTT-Rebirth
 
