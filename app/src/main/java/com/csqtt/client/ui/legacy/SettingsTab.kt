@@ -126,6 +126,8 @@ internal fun SettingsTabContent(
     var showSecretsDialog by rememberSaveable { mutableStateOf(false) }
 
     val tunnelRunning by TunnelManager.running.collectAsStateWithLifecycle()
+    val tunnelStarting by TunnelManager.starting.collectAsStateWithLifecycle()
+    val tunnelStopping by TunnelManager.stopping.collectAsStateWithLifecycle()
     var showHashModeGeneralDialog by rememberSaveable { mutableStateOf(false) }
     var showHashModeDetailDialog by rememberSaveable { mutableStateOf<String?>(null) }
     var showWorkModeGeneralDialog by rememberSaveable { mutableStateOf(false) }
@@ -141,6 +143,7 @@ internal fun SettingsTabContent(
     val turnTransport by settingsStore.turnTransport.collectAsStateWithLifecycle(
         initialValue = SettingsStore.cachedTurnTransport ?: CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT,
     )
+    val goobyEnabled by settingsStore.goobyEnabled.collectAsStateWithLifecycle(SettingsStore.cachedGoobyEnabled)
     val tcpTransportRiskAcknowledged by settingsStore.tcpTransportRiskAcknowledged.collectAsStateWithLifecycle(
         initialValue = false,
     )
@@ -820,6 +823,14 @@ internal fun SettingsTabContent(
                     onInfo = { transport -> showTurnTransportDetailDialog = transport },
                     onSelected = ::requestTurnTransport,
                 )
+                if (turnTransport == CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Gooby", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        Switch(checked = goobyEnabled,
+                            enabled = !tunnelRunning && !tunnelStarting && !tunnelStopping,
+                            onCheckedChange = { enabled -> scope.launch { settingsStore.saveGoobyEnabled(enabled, forProfile = activeProfile) } })
+                    }
+                }
 
                 TunnelWorkersControl(
                     value = currentWorkers,
@@ -840,7 +851,7 @@ internal fun SettingsTabContent(
                         title = "Экстра потоки",
                         description = "До ${CsqttConstants.Tunnel.MAX_WORKERS} потоков вместо ${CsqttConstants.Tunnel.DEFAULT_MAX_WORKERS}",
                         checked = extraWorkers,
-                        enabled = !tunnelRunning,
+                        enabled = true,
                         onCheckedChange = { checked -> scope.launch { settingsStore.saveExtraWorkers(checked) } },
                     )
                 }

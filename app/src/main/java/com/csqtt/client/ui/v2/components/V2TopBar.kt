@@ -43,7 +43,7 @@ fun V2TopBar(
         Row(Modifier.fillMaxWidth().height(if(title == null) 64.dp else 56.dp), verticalAlignment = Alignment.CenterVertically) {
             if (onBack != null) V2BackButton(onClick = onBack)
             androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
-                Text(title ?: "CSQTTR", color = if(title == null) colors.accent else colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = if(title == null) 25.sp else 22.sp)
+                Text(title ?: "CSQTTR", color = if(title == null) colors.accent else colors.textPrimary, fontWeight = FontWeight.Normal, fontSize = if(title == null) 25.sp else 22.sp)
                 if(title == null) version?.let { Text(it.substringBefore('-'), color = colors.textSecondary, fontSize = 11.sp) }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -90,7 +90,7 @@ fun V2VersionPill(
                 text = version,
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontFamily = V2VersionFamily,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.Normal,
                     fontSize = 16.sp,
                     letterSpacing = 0.5.sp,
                 ),

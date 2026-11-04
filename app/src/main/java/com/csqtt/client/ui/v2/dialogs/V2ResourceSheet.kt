@@ -34,7 +34,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -70,9 +69,9 @@ fun V2ResourceSheet(
     val snapshot by ResourceMonitor.snapshot.collectAsStateWithLifecycle()
     val session by ResourceMonitor.session.collectAsStateWithLifecycle()
 
-    DisposableEffect(Unit) {
-        ResourceMonitor.setDetailedMemoryEnabled(true)
-        onDispose { ResourceMonitor.setDetailedMemoryEnabled(false) }
+    androidx.lifecycle.compose.LifecycleStartEffect(Unit) {
+        val lease = ResourceMonitor.acquireVisibleConsumer()
+        onStopOrDispose { lease.close() }
     }
 
     fun animateDismiss(onDone: () -> Unit = onDismiss) {
@@ -130,7 +129,7 @@ fun V2ResourceSheet(
                         text = "Замер ресурсов",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontFamily = V2DisplayFamily,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 20.sp,
                         ),
                         color = colors.textPrimary,
@@ -161,7 +160,7 @@ fun V2ResourceSheet(
                             text = if (session.isActive) "ИДЁТ ЗАМЕР..." else "ЗАМЕР НЕ АКТИВЕН",
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontFamily = V2DisplayFamily,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Normal,
                                 fontSize = 12.sp,
                             ),
                             color = if (session.isActive) colors.accent else colors.textMuted,
@@ -172,7 +171,7 @@ fun V2ResourceSheet(
                             text = String.format(Locale.US, "%02d:%02d", elapsedMin, elapsedSec),
                             style = MaterialTheme.typography.headlineMedium.copy(
                                 fontFamily = V2DisplayFamily,
-                                fontWeight = FontWeight.ExtraBold,
+                                fontWeight = FontWeight.Normal,
                                 fontSize = 28.sp,
                             ),
                             color = colors.textPrimary,
@@ -225,14 +224,14 @@ fun V2ResourceSheet(
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             text = "CPU",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
                             color = colors.textMuted,
                         )
                         Text(
                             text = String.format(Locale.US, "%.1f%%", snapshot.cpuPercent),
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontFamily = V2DisplayFamily,
-                                fontWeight = FontWeight.ExtraBold,
+                                fontWeight = FontWeight.Normal,
                                 fontSize = 22.sp,
                             ),
                             color = colors.textPrimary,
@@ -264,7 +263,7 @@ fun V2ResourceSheet(
                         val pssMb = snapshot.breakdown.totalPssMb
                         Text(
                             text = if (pssMb > 0f) "ОЗУ (PSS)" else "ОЗУ (RAM)",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
                             color = colors.textMuted,
                         )
                         Text(
@@ -275,7 +274,7 @@ fun V2ResourceSheet(
                             ),
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontFamily = V2DisplayFamily,
-                                fontWeight = FontWeight.ExtraBold,
+                                fontWeight = FontWeight.Normal,
                                 fontSize = 22.sp,
                             ),
                             color = colors.textPrimary,
@@ -320,12 +319,12 @@ fun V2ResourceSheet(
                         ) {
                             Text(
                                 text = "СОСТАВ ПАМЯТИ (PSS)",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
                                 color = colors.textMuted,
                             )
                             Text(
                                 text = String.format(Locale.US, "всего %.0f МБ", breakdown.totalPssMb),
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
                                 color = colors.textPrimary,
                             )
                         }
@@ -355,12 +354,12 @@ fun V2ResourceSheet(
                     ) {
                         Text(
                             text = "СКОРОСТЬ И СЕТЬ",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
                             color = colors.textMuted,
                         )
                         Text(
                             text = if (snapshot.isTunnelRunning) "Активных воркеров: ${snapshot.activeWorkers}" else "Туннель выключен",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
                             color = if (snapshot.isTunnelRunning) colors.accent else colors.textMuted,
                         )
                     }
@@ -381,7 +380,7 @@ fun V2ResourceSheet(
                                 } else {
                                     String.format(Locale.US, "%.0f КБ/с", snapshot.rxSpeedKbps)
                                 },
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal),
                                 color = colors.textPrimary,
                             )
                         }
@@ -398,7 +397,7 @@ fun V2ResourceSheet(
                                 } else {
                                     String.format(Locale.US, "%.0f КБ/с", snapshot.txSpeedKbps)
                                 },
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal),
                                 color = colors.textPrimary,
                             )
                         }
@@ -416,7 +415,7 @@ fun V2ResourceSheet(
                             }
                             Text(
                                 text = String.format(Locale.US, "%.2f МБ", totalMb),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal),
                                 color = colors.textPrimary,
                             )
                         }
@@ -441,7 +440,7 @@ fun V2ResourceSheet(
                             text = "Плавающий оверлей",
                             style = MaterialTheme.typography.titleSmall.copy(
                                 fontFamily = V2BodyFamily,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Normal,
                                 fontSize = 14.sp,
                             ),
                             color = colors.textPrimary,
@@ -483,7 +482,7 @@ private fun MemoryRow(label: String, valueMb: Float) {
         )
         Text(
             text = String.format(Locale.US, "%.0f МБ", valueMb),
-            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Normal),
             color = colors.textPrimary,
         )
     }

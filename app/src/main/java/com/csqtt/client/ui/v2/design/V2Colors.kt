@@ -5,6 +5,10 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.csqtt.client.BrandDarkColorScheme
+import com.csqtt.client.BrandLightColorScheme
+import com.csqtt.client.CSQTTColors
+import com.csqtt.client.ui.legacy.design.CsqttDarkExtendedColors
 
 @Immutable
 data class V2Colors(
@@ -34,7 +38,11 @@ data class V2Colors(
     val warning: Color,
     val error: Color,
     val version: Color,
-)
+) {
+    // Filled destructive actions need a stable, legible white-on-red pair.
+    val danger: Color get() = Color(0xFFD92D40)
+    val onDanger: Color get() = Color.White
+}
 
 internal val V2DarkColors = V2Colors(
     background = Color(0xFF0D0D10),
@@ -152,7 +160,48 @@ internal val V2SteelBlueColors = V2Colors(
     version = Color(0xFF85929F),
 )
 
+// The original palette shares the actual classic tokens instead of approximating their RGB values.
+internal val V2ClassicOriginalColors = V2NordicSlateColors.copy(
+    background = BrandDarkColorScheme.background,
+    surface = BrandDarkColorScheme.surface,
+    surfaceElevated = BrandDarkColorScheme.surfaceVariant,
+    field = BrandDarkColorScheme.surface,
+    outline = BrandDarkColorScheme.outlineVariant,
+    textPrimary = BrandDarkColorScheme.onSurface,
+    textSecondary = BrandDarkColorScheme.onSurfaceVariant,
+    textMuted = BrandDarkColorScheme.outline,
+    accent = BrandDarkColorScheme.primary,
+    onAccent = BrandDarkColorScheme.onPrimary,
+    accentSoft = BrandDarkColorScheme.primaryContainer,
+    flower = BrandDarkColorScheme.primary,
+    contrast = BrandDarkColorScheme.primary,
+    onContrast = BrandDarkColorScheme.onPrimary,
+    hero = BrandDarkColorScheme.primaryContainer,
+    onHero = BrandDarkColorScheme.onPrimaryContainer,
+    heroRow = BrandDarkColorScheme.secondaryContainer,
+    navSelected = BrandDarkColorScheme.background,
+    bottomSurface = BrandDarkColorScheme.surface,
+    terminal = CsqttDarkExtendedColors.terminalBackground,
+    terminalText = CsqttDarkExtendedColors.terminalText,
+    terminalMuted = CsqttDarkExtendedColors.terminalMuted,
+    success = CSQTTColors.connected,
+    warning = CSQTTColors.warning,
+    error = Color(0xFFFF737A),
+    version = BrandDarkColorScheme.onSurfaceVariant,
+)
+
+object V2DarkPalette {
+    const val ORIGINAL = "classic_original"
+    const val SOFT = "classic_soft"
+    const val ORIGINAL_LABEL = "Оригинальная"
+    const val SOFT_LABEL = "Мягкая"
+
+    fun normalize(value: String?): String = ORIGINAL
+}
+
 fun v2DarkColorsForPalette(palette: String?): V2Colors = when (palette) {
+    V2DarkPalette.ORIGINAL -> V2ClassicOriginalColors
+    V2DarkPalette.SOFT -> V2ClassicOriginalColors
     "muted_denim" -> V2MutedDenimColors
     "steel_blue" -> V2SteelBlueColors
     "default", "pure_black" -> V2DarkColors
@@ -161,32 +210,53 @@ fun v2DarkColorsForPalette(palette: String?): V2Colors = when (palette) {
 }
 
 internal val V2LightColors = V2Colors(
-    background = Color(0xFFE5E8EE),
-    surface = Color(0xFFF0F2F6),
-    surfaceElevated = Color(0xFFD6DBE4),
-    field = Color(0xFFE1E5ED),
-    outline = Color(0xFFC0C0CB),
+    background = Color(0xFFF5F6F8),
+    surface = Color(0xFFFFFFFF),
+    surfaceElevated = Color(0xFFEAEDF1),
+    field = Color(0xFFEAEDF1),
+    outline = Color(0xFFABB3BF),
     textPrimary = Color(0xFF151519),
     textSecondary = Color(0xFF5F5F6B),
-    textMuted = Color(0xFF8A8A96),
+    textMuted = Color(0xFF626B78),
     accent = Color(0xFF1769E2),
     onAccent = Color(0xFFFFFFFF),
     accentSoft = Color(0xFFDCEBFC),
     flower = Color(0xFF2864AB),
     contrast = Color(0xFF1B1B20),
     onContrast = Color(0xFFF5F5F8),
-    hero = Color(0xFFD9D9E4),
+    hero = Color(0xFFE8EDF4),
     onHero = Color(0xFF17171B),
-    heroRow = Color(0xFFC9C9D6),
-    navSelected = Color(0xFFDCDCE5),
-    bottomSurface = Color(0xFFE8E8EE),
+    heroRow = Color(0xFFDCE3EC),
+    navSelected = Color(0xFFEAEDF1),
+    bottomSurface = Color(0xFFFFFFFF),
     terminal = Color(0xFF101014),
     terminalText = Color(0xFFD9D9E0),
     terminalMuted = Color(0xFF7A7A86),
     success = Color(0xFF2E9E57),
     warning = Color(0xFFB7791F),
-    error = Color(0xFFC54545),
+    error = Color(0xFFCC2638),
     version = Color(0xFF5F5E93),
+)
+
+internal val V2ClassicLightColors = V2LightColors.copy(
+    background = BrandLightColorScheme.background,
+    surface = BrandLightColorScheme.surface,
+    surfaceElevated = BrandLightColorScheme.surfaceVariant,
+    field = BrandLightColorScheme.surfaceVariant,
+    outline = BrandLightColorScheme.outlineVariant,
+    textPrimary = BrandLightColorScheme.onSurface,
+    textSecondary = BrandLightColorScheme.onSurfaceVariant,
+    accent = BrandLightColorScheme.primary,
+    onAccent = BrandLightColorScheme.onPrimary,
+    accentSoft = BrandLightColorScheme.primaryContainer,
+    flower = BrandLightColorScheme.primary,
+    contrast = BrandLightColorScheme.primary,
+    onContrast = BrandLightColorScheme.onPrimary,
+    hero = BrandLightColorScheme.primaryContainer,
+    onHero = BrandLightColorScheme.onPrimaryContainer,
+    heroRow = BrandLightColorScheme.secondaryContainer,
+    bottomSurface = BrandLightColorScheme.surface,
+    version = BrandLightColorScheme.onSurfaceVariant,
 )
 
 internal val LocalV2Colors = staticCompositionLocalOf { V2DarkColors }

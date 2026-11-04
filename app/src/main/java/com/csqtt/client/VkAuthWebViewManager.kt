@@ -32,24 +32,36 @@ internal object VkAuthWebViewManager {
 
     fun acquire(context: Context): WebView = createWebView(context)
 
-    fun clearVkSessionCookies() {
+    /** Clear only the embedded VK browser session; saved account credentials stay in SettingsStore. */
+    fun clearVkSessionCookies(onComplete: (Boolean) -> Unit = {}) {
         mainHandler.post {
-            runCatching {
+            val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+            fun complete(success: Boolean) {
+                if (completed.compareAndSet(false, true)) onComplete(success)
+            }
+            try {
+                VK_AUTH_COOKIE_ORIGINS.forEach { android.webkit.WebStorage.getInstance().deleteOrigin(it.trimEnd('/')) }
                 val manager = CookieManager.getInstance()
                 val deletions = VK_AUTH_COOKIE_ORIGINS.flatMap { origin ->
                     vkCookieDeletionHeaders(origin, manager.getCookie(origin)).map { origin to it }
                 }
                 if (deletions.isEmpty()) {
                     manager.flush()
+                    complete(true)
                 } else {
                     val remaining = AtomicInteger(deletions.size)
+                    val failed = java.util.concurrent.atomic.AtomicBoolean(false)
                     deletions.forEach { (origin, header) ->
-                        manager.setCookie(origin, header) {
-                            if (remaining.decrementAndGet() == 0) manager.flush()
+                        manager.setCookie(origin, header) { accepted ->
+                            if (!accepted) failed.set(true)
+                            if (remaining.decrementAndGet() == 0) {
+                                manager.flush()
+                                complete(!failed.get())
+                            }
                         }
                     }
                 }
-            }
+            } catch (_: Exception) { complete(false) }
         }
     }
 
@@ -170,7 +182,11 @@ internal class VkAuthSession(
     private val onToken: (VkAuthPayload) -> Unit,
     private val onError: (String) -> Unit,
     private val onPhaseChange: (VkAuthPhase) -> Unit = {},
+    private val chooseAccount: Boolean = false,
+    private val acquireToken: suspend (String, String) -> Result<VkAuthPayload> = VkTokenScraper::scrape,
 ) {
+    private var preparingAccountChoice = chooseAccount
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var webView: WebView? = null
@@ -193,6 +209,8 @@ internal class VkAuthSession(
                 installTelevisionNavigation(v)
                 if (url.contains("access_token=")) {
                     handleUrl(url)
+                } else if (!preparingAccountChoice && phase == VkAuthPhase.LOGIN && isVkLoggedIn()) {
+                    switchToTokenPhase(v)
                 }
                 if (!uiReadyReported) {
                     uiReadyReported = true
@@ -209,13 +227,15 @@ internal class VkAuthSession(
             }
 
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                // Authorization stays in this WebView, including when VK offers an app deep link.
+                if (request.url.scheme !in listOf("https", "http")) return true
                 val url = request.url.toString()
                 if (url.contains("access_token=")) {
                     handleUrl(url)
                     return true
                 }
                 val path = request.url.path ?: ""
-                if (phase == VkAuthPhase.LOGIN && (path.startsWith("/feed") || isVkLoggedIn())) {
+                if (!preparingAccountChoice && phase == VkAuthPhase.LOGIN && (path.startsWith("/feed") || isVkLoggedIn())) {
                     switchToTokenPhase(v)
                     return true
                 }
@@ -248,7 +268,23 @@ internal class VkAuthSession(
             onUiReady()
         }
 
-        if (isVkLoggedIn()) {
+        if (chooseAccount) {
+            phase = VkAuthPhase.LOGIN
+            onPhaseChange(phase)
+            // Opening /login with the previous cookie just redirects to the same profile.
+            // Wait for deletion before navigation, and do not accept that old session meanwhile.
+            VkAuthWebViewManager.clearVkSessionCookies { cleared ->
+                if (!finished && webView === view) {
+                    preparingAccountChoice = false
+                    if (cleared) {
+                        view.clearHistory()
+                        view.loadUrl(CsqttConstants.VkAutoHash.VK_LOGIN_URL, mapOf("Cache-Control" to "no-cache"))
+                    } else {
+                        finishWithError("Не удалось открыть вход в другой аккаунт VK. Попробуйте ещё раз")
+                    }
+                }
+            }
+        } else if (isVkLoggedIn()) {
             switchToTokenPhase(view)
         } else {
             phase = VkAuthPhase.LOGIN
@@ -305,6 +341,7 @@ internal class VkAuthSession(
     }
 
     private fun switchToTokenPhase(view: WebView) {
+        if (finished || preparingAccountChoice || phase == VkAuthPhase.TOKEN) return
         phase = VkAuthPhase.TOKEN
         onPhaseChange(phase)
         lastUrl = null
@@ -332,7 +369,7 @@ internal class VkAuthSession(
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             if (finished) return@launch
             
-            val result = VkTokenScraper.scrape(cookieString, userAgent)
+            val result = acquireToken(cookieString, userAgent)
             
             mainHandler.post {
                 if (finished) return@post
@@ -372,13 +409,15 @@ internal class VkAuthSession(
                 return
             }
             if (System.currentTimeMillis() - startedAt > CsqttConstants.VkAutoHash.AUTH_TIMEOUT_MS) {
-                finishWithError("Тайм-аут ожидания access_token")
+                finishWithError("Превышено время ожидания входа в VK")
                 return
             }
 
             when (phase) {
                 VkAuthPhase.LOGIN -> {
-                    if (isVkLoggedIn()) {
+                    if (preparingAccountChoice) {
+                        // Ignore the previous session while its browser data is being cleared.
+                    } else if (isVkLoggedIn()) {
                         switchToTokenPhase(view)
                     } else {
                         val currentUrl = view.url.orEmpty()
@@ -410,6 +449,7 @@ internal class VkAuthSession(
     }
 
     private fun handleUrl(url: String) {
+        if (finished || preparingAccountChoice) return
         val uri = runCatching { url.toUri() }.getOrNull()
         val raw = uri?.fragment ?: url.substringAfter("#", "").ifEmpty { url.substringAfter("?", "") }
         val fragment = raw.substringAfter("#").substringAfter("?")
@@ -429,6 +469,7 @@ internal class VkAuthSession(
     }
 
     private fun handleAccessToken(fragment: String) {
+        if (finished || preparingAccountChoice) return
         val clean = fragment.substringAfter('#').substringAfter('?')
         val params = parseFragmentParams(clean)
         val token = params["access_token"]
@@ -474,6 +515,7 @@ internal class VkAuthSession(
     }
 
     private fun repeatAuthorization() {
+        if (finished || preparingAccountChoice) return
         if (paused) {
             pendingAuthorizationRetry = true
             return

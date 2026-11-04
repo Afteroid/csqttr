@@ -74,6 +74,7 @@ import com.csqtt.client.ui.legacy.LogsTab
 import com.csqtt.client.ui.legacy.SettingsTab
 import com.csqtt.client.CsqttConstants
 import com.csqtt.client.ui.legacy.DeployTab
+import com.csqtt.client.ui.legacy.LegacyDeployCheckState
 import com.csqtt.client.ui.legacy.InfoTab
 import com.csqtt.client.ui.legacy.components.LocalCsqttHeaderActions
 import com.csqtt.client.ui.legacy.design.CsqttMotion
@@ -91,6 +92,8 @@ class MainActivity : ComponentActivity() {
     private val appSettingsStore by lazy { SettingsStore(applicationContext) }
     private var renderUi by mutableStateOf(false)
     private var showVkAuthDialog by mutableStateOf(false)
+    private var showVkAccountsDialog by mutableStateOf(false)
+    private var chooseVkAccount by mutableStateOf(false)
     private var pendingDeepLink by mutableStateOf<String?>(null)
     private var batteryPromptInFlight = false
 
@@ -115,6 +118,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         activeActivities++
+        WifiDiscovery.setForeground(true)
+        WifiDiscovery.acquire(this, this)
         renderUi = true
         ManlCaptchaWebViewManager.checkAndShowPendingCaptcha(this)
     }
@@ -122,7 +127,14 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         renderUi = false
         activeActivities = (activeActivities - 1).coerceAtLeast(0)
+        WifiDiscovery.release(this)
+        WifiDiscovery.setForeground(isForeground)
         super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        WifiDiscovery.refresh()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,6 +142,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(if (discardStaleUiState) null else savedInstanceState)
 
         importCsqttLink(intent)
+        if (intent?.action == WifiDiscoveryNotification.OPEN) WifiDiscovery.openHome.value = true
 
         TunnelManager.initObservers(this)
 
@@ -149,20 +162,20 @@ class MainActivity : ComponentActivity() {
             val authScope = rememberCoroutineScope()
             val uiStateHolder = rememberSaveableStateHolder()
             val design by appSettingsStore.uiDesign.collectAsStateWithLifecycle<String?>(initialValue = null)
-            val chosenTheme by appSettingsStore.themeMode.collectAsStateWithLifecycle("system")
+            val chosenTheme by appSettingsStore.themeMode.collectAsStateWithLifecycle("dark")
             val dark = when (chosenTheme) { "dark" -> true; "light" -> false; else -> androidx.compose.foundation.isSystemInDarkTheme() }
             if (renderUi) {
-                uiStateHolder.SaveableStateProvider("main_ui_${design ?: "loading"}") {
+                uiStateHolder.SaveableStateProvider("main_ui_${if (design == null) "loading" else if (design == "classic") "classic" else "v2"}") {
             val settingsStore = remember { appSettingsStore }
             if (design == null) {
                 // Wait for the stored choice instead of briefly drawing the other design.
-            } else if (design == "v2") {
+            } else if (design != "classic") {
                 CsqttV2Root(
                     settingsStore = settingsStore,
-                    onVkAuthRequested = { showVkAuthDialog = true },
+                    onVkAuthRequested = { showVkAccountsDialog = true },
                 )
             } else {
-            val themeMode by settingsStore.themeMode.collectAsStateWithLifecycle(initialValue = CsqttConstants.Theme.MODE_SYSTEM)
+            val themeMode by settingsStore.themeMode.collectAsStateWithLifecycle(initialValue = CsqttConstants.Theme.MODE_DARK)
             val activeFingerprint by settingsStore.selectedFingerprint.collectAsStateWithLifecycle(initialValue = CsqttConstants.Tunnel.DEFAULT_FINGERPRINT)
             val scope = rememberCoroutineScope()
 
@@ -187,7 +200,7 @@ class MainActivity : ComponentActivity() {
                         onFingerprintChange = { fp ->
                             scope.launch { settingsStore.saveFingerprint(fp) }
                         },
-                        onVkAuthRequested = { showVkAuthDialog = true },
+                        onVkAuthRequested = { showVkAccountsDialog = true },
                     )
                     // A csqtt:// link, the classic way: confirm, then it replaces the current configuration. It stays
                     // pending until the user chooses, so the dialog survives a rotation instead of losing the link.
@@ -215,18 +228,40 @@ class MainActivity : ComponentActivity() {
             }
                 }
             }
+            if (showVkAccountsDialog) {
+                com.csqtt.client.ui.v2.design.CsqttV2Theme(darkTheme = dark, themePalette = UiDesignPresets.darkPalette(design ?: UiDesignPresets.DEFAULT)) {
+                    com.csqtt.client.ui.v2.dialogs.V2VkAccountsDialog(
+                        store = appSettingsStore,
+                        onAuthorize = { choose ->
+                            chooseVkAccount = choose
+                            showVkAccountsDialog = false
+                            showVkAuthDialog = true
+                        },
+                        onDismiss = { showVkAccountsDialog = false },
+                    )
+                }
+            }
             if (showVkAuthDialog) {
-                val onToken: (VkAuthPayload) -> Unit = { payload ->
+                val onToken: (VkAuthPayload) -> Unit = onToken@{ payload ->
+                        if (!showVkAuthDialog) return@onToken
                         showVkAuthDialog = false
                         authScope.launch {
-                            appSettingsStore.saveVkAccessToken(payload.token, payload.userId)
-                            authContext.showRaisedToast(if (payload.expiresIn > 0) "Токен VK сохранён (временный)" else "Токен VK сохранён", Toast.LENGTH_SHORT)
+                            if (TunnelManager.running.value || TunnelManager.starting.value || TunnelManager.stopping.value) {
+                                authContext.showRaisedToast("Остановите туннель перед сменой аккаунта", Toast.LENGTH_LONG)
+                                return@launch
+                            }
+                            try {
+                                appSettingsStore.saveVkAccessToken(payload.token, payload.userId)
+                                authContext.showRaisedToast("Аккаунт VK подключён", Toast.LENGTH_SHORT)
+                            } catch (_: Exception) {
+                                authContext.showRaisedToast("Не удалось сохранить аккаунт VK. Остановите туннель и повторите вход", Toast.LENGTH_LONG)
+                            }
                         }
                     }
                 if (design == "classic") CSQTTTheme(themeMode = chosenTheme) {
-                    com.csqtt.client.ui.legacy.dialogs.VkAuthDialog(onToken, onDismiss = { showVkAuthDialog = false })
-                } else com.csqtt.client.ui.v2.design.CsqttV2Theme(darkTheme = dark) {
-                    VkAuthDialog(onToken, onDismiss = { showVkAuthDialog = false })
+                    com.csqtt.client.ui.legacy.dialogs.VkAuthDialog(onToken, onDismiss = { showVkAuthDialog = false }, chooseAccount = chooseVkAccount)
+                } else com.csqtt.client.ui.v2.design.CsqttV2Theme(darkTheme = dark, themePalette = UiDesignPresets.darkPalette(design ?: UiDesignPresets.DEFAULT)) {
+                    VkAuthDialog(onToken, onDismiss = { showVkAuthDialog = false }, chooseAccount = chooseVkAccount)
                 }
             }
             val pendingLink = pendingDeepLink
@@ -250,6 +285,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         importCsqttLink(intent)
+        if (intent.action == WifiDiscoveryNotification.OPEN) WifiDiscovery.openHome.value = true
     }
 
     private fun importCsqttLink(intent: Intent?) {
@@ -332,9 +368,9 @@ internal fun shouldCommitNavigationSwipe(progress: Float): Boolean = progress > 
 internal fun resolveActiveNavIds(csqttLinkMode: Boolean, participantShowLogs: Boolean): List<Int> {
     val allIds = listOf(0, 1, 2, 3, 4)
     return allIds.filter { id ->
+        if (id == 3 && !participantShowLogs) return@filter false
         if (csqttLinkMode) {
             if (id == 2) return@filter false
-            if (id == 3 && !participantShowLogs) return@filter false
         }
         true
     }
@@ -362,6 +398,7 @@ fun MainScreen(
     val deploySettings by deployStore.deploySettingsSnapshot.collectAsStateWithLifecycle(
         initialValue = DeploySettingsSnapshot()
     )
+    val deployCheckState = remember(deploySettings.profile) { LegacyDeployCheckState() }
     val tunnelAuthSettings by settingsStore.tunnelAuthSnapshot.collectAsStateWithLifecycle(
         initialValue = TunnelAuthSnapshot()
     )
@@ -382,6 +419,10 @@ fun MainScreen(
     val infoActionsExpanded by settingsStore.infoActionsExpanded.collectAsStateWithLifecycle(initialValue = false)
     val infoProjectExpanded by settingsStore.infoProjectExpanded.collectAsStateWithLifecycle(initialValue = false)
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val openWifiHome by WifiDiscovery.openHome.collectAsStateWithLifecycle()
+    LaunchedEffect(openWifiHome) {
+        if (openWifiHome) { selectedTab = 0; WifiDiscovery.openHome.value = false }
+    }
     var tunnelValidationRequest by rememberSaveable { mutableIntStateOf(0) }
     val dragTargetIndex = remember { mutableIntStateOf(-1) }
     val dragProgress = remember { mutableFloatStateOf(0f) }
@@ -591,11 +632,11 @@ fun MainScreen(
                                     Spacer(modifier = Modifier.fillMaxSize())
                                 }
                                 2 -> if (!csqttLinkMode) {
-                                    DeployTab(deployStore, deploySettings)
+                                    DeployTab(deployStore, deploySettings, checkState = deployCheckState)
                                 } else {
                                     Spacer(modifier = Modifier.fillMaxSize())
                                 }
-                                3 -> if (!csqttLinkMode || participantShowLogs) {
+                                3 -> if (participantShowLogs) {
                                     LogsTab(settingsStore)
                                 } else {
                                     Spacer(modifier = Modifier.fillMaxSize())

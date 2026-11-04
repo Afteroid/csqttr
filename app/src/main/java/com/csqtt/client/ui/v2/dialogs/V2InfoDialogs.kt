@@ -190,6 +190,7 @@ fun V2ExtraWorkersInfoDialog(onDismiss: () -> Unit) {
         Text(
             text = """
                 • Функция повышает максимальное количество потоков с ${CsqttConstants.Tunnel.DEFAULT_MAX_WORKERS} до ${CsqttConstants.Tunnel.MAX_WORKERS}.
+                • Во время подключения выбор сохраняется для следующего запуска туннеля.
                 • Значения выбираются кратно ${CsqttConstants.Tunnel.WORKERS_PER_GROUP} потокам.
                 • В режиме «Авто ВК» функция недоступна и отключается автоматически.
             """.trimIndent(),
@@ -355,7 +356,7 @@ private fun V2TimedWarningDialog(
 fun V2WifiAutoPauseInfoDialog(onDismiss: () -> Unit) {
     val colors = V2Theme.colors
     V2DialogContainer(
-        title = "Автопауза при Wi-Fi",
+        title = com.csqtt.client.WifiCopy.TITLE,
         onDismiss = onDismiss,
         actions = {
             V2PillButton(
@@ -368,7 +369,7 @@ fun V2WifiAutoPauseInfoDialog(onDismiss: () -> Unit) {
         },
     ) {
         Text(
-            text = "Когда функция включена, Wi-Fi правила управляют автопаузой туннеля. В белом списке VPN работает только в указанных SSID, а в остальных Wi-Fi сетях остаётся на паузе. В чёрном списке VPN ставится на паузу только в указанных SSID. При переходе на мобильную сеть туннель работает как обычно.",
+            text = com.csqtt.client.WifiCopy.HELP,
             style = MaterialTheme.typography.bodySmall.copy(
                 fontFamily = V2BodyFamily,
                 lineHeight = 18.sp,

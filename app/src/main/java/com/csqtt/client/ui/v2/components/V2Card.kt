@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,13 +22,14 @@ import com.csqtt.client.ui.v2.design.V2Theme
 @Composable
 fun V2Card(
     modifier: Modifier = Modifier,
-    color: Color = V2Theme.colors.bottomSurface,
+    color: Color = V2Theme.colors.surface,
     contentColor: Color = V2Theme.colors.textPrimary,
     shape: Shape = V2Shapes.Row,
     borderColor: Color? = null,
     contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
     contentModifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
@@ -54,6 +56,7 @@ fun V2Card(
                 .fillMaxWidth()
                 .then(contentModifier)
                 .padding(contentPadding),
+            verticalArrangement = verticalArrangement,
             content = content,
         )
     }

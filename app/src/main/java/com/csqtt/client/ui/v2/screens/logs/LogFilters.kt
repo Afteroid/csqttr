@@ -12,13 +12,14 @@ internal fun effectiveLogLevel(entry: LogEntry): LogLevel = when {
     else -> LogLevel.LOG
 }
 
-internal val logLevels = listOf("Все уровни", "Ошибки", "Успех", "Сеть", "TURN", "Пинг", "Отладка", "Сообщения")
+internal val logLevels = listOf("Ошибки", "Обычные", "Подробные")
 internal val logSources = listOf("Все события", "Туннель", "Деплой", "Система")
 
 internal fun filterLogEntry(entry: LogEntry, level: String, source: String): LogEntry? {
     val entryLevel = effectiveLogLevel(entry)
     val levelMatches = when(level) {
         "Ошибки" -> entryLevel == LogLevel.ERR
+        "Обычные" -> entryLevel !in setOf(LogLevel.DBG, LogLevel.TURN, LogLevel.PING)
         "Успех" -> entryLevel == LogLevel.OK
         "Сеть" -> entryLevel == LogLevel.NET
         "TURN" -> entryLevel == LogLevel.TURN

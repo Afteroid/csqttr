@@ -1,3 +1,4 @@
+use crate::traffic_diagnostics::{add as traffic_add, Metric as TM};
 use crate::{
     auth::TurnCredentials,
     dispatcher::{Dispatcher, WorkerChannels},
@@ -81,6 +82,7 @@ pub struct SessionConfig {
     pub turn_port: Option<Arc<str>>,
     pub srtp_mode: SrtpMode,
     pub turn_transport: TurnTransportMode,
+    pub gooby_proxy: Option<crate::gooby::GoobyProxy>,
     pub local_port: Arc<str>,
     pub password: Arc<str>,
     pub generation: u64,
@@ -622,9 +624,12 @@ async fn install_session_ciphers(
     reader: &mut TransportReader,
     config: &SessionConfig,
     events: &crate::events::Events,
+    diagnostic: &mut crate::stream_diagnostics::StreamDiagnostics,
 ) -> Result<()> {
+    diagnostic.begin("srtp");
     if !config.srtp_mode.uses_dtls() {
         install_cipher_pair(shared, cipher_pair(wrap_key_material(config))?);
+        diagnostic.record("ok", "WRAP-derived SRTP");
         crate::log_error!(
             "[СЕССИЯ #{}] SRTP: {} (legacy WRAP-производные ключи)",
             config.id,
@@ -632,16 +637,19 @@ async fn install_session_ciphers(
         );
         return Ok(());
     }
-    match run_dtls_handshake(writer, reader, config).await {
+    diagnostic.begin("dtls");
+    match run_dtls_handshake(writer, reader, config, diagnostic).await {
         Ok(keys) => {
             install_cipher_pair(shared, cipher_pair(keys)?);
             if config.id == 1 {
                 crate::log_error!("[СЕССИЯ #{}] SRTP: DTLS-SRTP ✓", config.id);
             }
             events.dtls(config.id, "DTLS-хендшейк успешен (ECDSA P-256)");
+            diagnostic.record("ok", "DTLS-SRTP established");
             Ok(())
         }
         Err(error) => {
+            diagnostic.record("error", &format!("{error:#}"));
             events.dtls(config.id, &format!("рукопожатие не состоялось ({error:#})"));
             crate::log_error!("[СЕССИЯ #{}] DTLS-SRTP не состоялся ({error:#})", config.id);
             if config.srtp_mode.falls_back_to_wrap() {
@@ -650,6 +658,7 @@ async fn install_session_ciphers(
                     config.id
                 );
                 events.dtls(config.id, "AUTO fallback -> WRAP-SRTP");
+                diagnostic.record("fallback", "AUTO -> WRAP-SRTP");
                 install_cipher_pair(shared, cipher_pair(wrap_key_material(config))?);
                 Ok(())
             } else {
@@ -663,6 +672,7 @@ async fn run_dtls_handshake(
     writer: &mut TransportWriter,
     reader: &mut TransportReader,
     config: &SessionConfig,
+    diagnostic: &crate::stream_diagnostics::StreamDiagnostics,
 ) -> Result<crate::dtls::DtlsSrtpKeys> {
     let mut handshake = crate::dtls::DtlsClientHandshake::new()?;
     let mut flight = handshake.start()?;
@@ -681,6 +691,10 @@ async fn run_dtls_handshake(
     let mut inbound_datagrams = 0u32;
     while !handshake.is_connected() {
         if tokio::time::Instant::now() >= deadline {
+            diagnostic.record("timeout", &format!(
+                "DTLS deadline={}ms; state={}; inbound={}; retransmits={}",
+                DTLS_HANDSHAKE_TIMEOUT.as_millis(), handshake_message_label(&handshake),
+                inbound_datagrams, retransmits));
             crate::log_error!(
                 "[СЕССИЯ #{}] DTLS: таймаут рукопожатия за {} мс (состояние {}, входящих {}, повторов {})",
                 config.id,
@@ -791,12 +805,16 @@ fn authenticate_inbound(
         return true;
     }
     if !is_rtp_packet(packet.as_slice()) {
+        traffic_add(TM::NonRtpDrops, 1);
         return false;
     }
     let Ok(sequence) = cipher.unwrap(packet, config.mode) else {
+        traffic_add(TM::AuthDrops, 1);
         return false;
     };
-    replay.rtp.accept_rtp(sequence)
+    { let accepted = replay.rtp.accept_rtp(sequence);
+      if !accepted { traffic_add(TM::ReplayDrops, 1); }
+      accepted }
 }
 
 struct ActiveConnection {
@@ -953,6 +971,8 @@ pub async fn run_session(
         (None, _) => turn_address.to_string(),
     };
     crate::log_error!("[TURN] Подключение к {target_display}");
+    let mut diagnostic = crate::stream_diagnostics::StreamDiagnostics::new(
+        runtime.events.enabled(), config.id, target_display);
     let cancel = runtime.cancel.clone();
     let turn_host = config.turn_host.clone();
     let turn_port = config.turn_port.clone();
@@ -960,21 +980,23 @@ pub async fn run_session(
     if let Some(started) = runtime.allocation_started.take() {
         let _ = started.send(());
     }
-    let mut connect = Box::pin(TurnAllocation::connect(
+    let mut connect = Box::pin(TurnAllocation::connect_diagnosed(
         TurnConnectTarget {
             address: turn_address,
             override_host: turn_host.as_deref(),
             override_port: turn_port.as_deref(),
             transport_mode: turn_transport,
+            gooby_proxy: config.gooby_proxy,
         },
         credentials.username,
         credentials.password,
         config.peer,
         runtime.pool.clone(),
+        Some(&mut diagnostic),
     ));
-    let allocation = tokio::select! {
+    let allocation_result = tokio::select! {
         biased;
-        result = &mut connect => result.map_err(TurnAllocateError)?,
+        result = &mut connect => result,
         _ = cancel.cancelled() => {
             if let Ok(Ok(allocation)) = tokio::time::timeout(CONNECT_CANCEL_GRACE, &mut connect).await {
                 let _ = tokio::time::timeout(DEALLOCATE_TIMEOUT, allocation.deallocate()).await;
@@ -983,10 +1005,15 @@ pub async fn run_session(
         },
     };
     drop(connect);
+    let allocation = allocation_result.map_err(|error| {
+        diagnostic.record("error", &format!("{error:#}"));
+        TurnAllocateError(error)
+    })?;
     if let Some(ready) = runtime.allocation_ready.take() {
         let _ = ready.send(());
     }
     crate::log_error!("[СЕССИЯ #{}] Relay: {}", config.id, allocation.local_addr());
+    diagnostic.begin("channel_bind");
     let channel = tokio::select! {
         biased;
         result = allocation.prepare_channel() => result,
@@ -996,14 +1023,17 @@ pub async fn run_session(
         },
     };
     if let Err(error) = channel {
+        diagnostic.record("error", &format!("{error:#}"));
         let _ = tokio::time::timeout(DEALLOCATE_TIMEOUT, allocation.deallocate()).await;
         return Err(error.context("TURN ChannelBind обязателен"));
     }
+    diagnostic.record("ok", "");
     let session = tokio::spawn(run_allocated_session(
         config,
         runtime,
         allocation.clone(),
         turn_path,
+        diagnostic,
     ));
     let result = await_session_task(&cancel, session).await;
     let _ = tokio::time::timeout(DEALLOCATE_TIMEOUT, allocation.deallocate()).await;
@@ -1063,6 +1093,7 @@ async fn run_allocated_session(
     mut runtime: SessionRuntime,
     allocation: Arc<TurnAllocation>,
     _turn_path: Arc<str>,
+    mut diagnostic: crate::stream_diagnostics::StreamDiagnostics,
 ) -> Result<bool> {
     let session_cancel = CancellationToken::new();
     let turn_receiver = allocation.take_receiver()?;
@@ -1086,12 +1117,14 @@ async fn run_allocated_session(
         &mut reader_transport,
         &config,
         &runtime.events,
+        &mut diagnostic,
     )
     .await
     .context("инициализация SRTP")?;
     let incarnation_id = NEXT_INCARNATION_ID.fetch_add(1, Ordering::Relaxed).max(1);
     let config_tx = config.get_config.then(|| runtime.config_tx.clone());
     let mut routing_reassembler = RoutingReassembler::new();
+    diagnostic.begin("getconf");
     let config_delivered = match request_configuration(
         &mut writer_transport,
         &mut reader_transport,
@@ -1108,6 +1141,7 @@ async fn run_allocated_session(
     .await
     {
         Ok(delivered) => {
+            diagnostic.record("ok", "");
             let delivered = config.get_config && delivered;
             if let Some(state) = &runtime.config_delivery {
                 state.complete(delivered);
@@ -1115,6 +1149,7 @@ async fn run_allocated_session(
             delivered
         }
         Err(error) => {
+            diagnostic.record("error", &format!("{error:#}"));
             if let Some(state) = &runtime.config_delivery {
                 state.complete(false);
             }
@@ -1148,6 +1183,8 @@ async fn run_allocated_session(
     }
     crate::log_error!("[ВОРКЕР #{}] [READY] Поток готов ✓", config.id);
     runtime.events.ready(config.id);
+    diagnostic.begin("active");
+    diagnostic.record("ready", "");
     config.repair.mark_ready(config.id);
     let _active = ActiveConnection::new(runtime.stats.clone(), runtime.events.clone());
     let mut writer = tokio::spawn(writer_loop(
@@ -1212,6 +1249,11 @@ async fn run_allocated_session(
             (result.map_err(anyhow::Error::from).and_then(|value| value), 2)
         }
     };
+    match &session_result {
+        Ok(()) => diagnostic.record("closed", "session stopped"),
+        Err(error) => diagnostic.record("error", &format!("{}: {error:#}",
+            match completed { 1 => "writer", 2 => "reader", _ => "session" })),
+    }
     session_cancel.cancel();
     stop_session_tasks(completed, writer, reader).await;
     crate::log_error!("[СЕССИЯ #{}] Завершена", config.id);
@@ -1529,6 +1571,7 @@ async fn reader_loop(
         }
         if !is_ip_packet(packet.as_slice()) {
             dropped_non_ip += 1;
+            traffic_add(TM::NonIpDrops, 1);
             if dropped_non_ip <= 8 || dropped_non_ip.is_multiple_of(1000) {
                 crate::log_error!(
                     "[СЕССИЯ] Отброшен не-IP пакет от пира #{}: {} байт, первый байт 0x{:02X}",
@@ -1621,6 +1664,7 @@ mod tests {
             turn_host: None,
             turn_port: None,
             turn_transport: TurnTransportMode::TcpTls,
+            gooby_proxy: None,
             srtp_mode: SrtpMode::Auto,
             local_port: Arc::from("9000"),
             password: Arc::from("pass1234"),
@@ -1649,6 +1693,7 @@ mod tests {
             turn_host: None,
             turn_port: None,
             turn_transport: TurnTransportMode::Udp,
+            gooby_proxy: None,
             srtp_mode: SrtpMode::Auto,
             local_port: Arc::from("9000"),
             password: Arc::from("pass1234"),

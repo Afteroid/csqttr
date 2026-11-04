@@ -65,6 +65,7 @@ import com.csqtt.client.ui.legacy.design.CsqttShapes
 internal fun VkAuthDialog(
     onToken: (VkAuthPayload) -> Unit,
     onDismiss: () -> Unit,
+    chooseAccount: Boolean = false,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -79,6 +80,7 @@ internal fun VkAuthDialog(
             onToken = onToken,
             onError = { errorMessage = it },
             onPhaseChange = { phase = it },
+            chooseAccount = chooseAccount,
         )
     }
 
@@ -106,7 +108,7 @@ internal fun VkAuthDialog(
 
     val title = when (phase) {
         VkAuthPhase.LOGIN -> "Войдите в аккаунт ВК"
-        VkAuthPhase.TOKEN -> "Получение токена"
+        VkAuthPhase.TOKEN -> "Подключение аккаунта"
     }
 
     Dialog(
@@ -174,10 +176,11 @@ internal fun VkAuthDialog(
 
                     if (phase == VkAuthPhase.LOGIN) {
                         Text(
-                            "Войдите любым способом, затем токен будет получен автоматически",
+                            "Войдите в свой аккаунт VK",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+
                     }
 
                     Box(

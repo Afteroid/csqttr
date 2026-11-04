@@ -176,7 +176,7 @@ internal fun V2VkAuthDialog(
                         text = title,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontFamily = V2BodyFamily,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 18.sp,
                         ),
                         color = colors.textPrimary,

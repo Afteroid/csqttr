@@ -1,5 +1,6 @@
 package com.csqtt.client.ui.v2.screens.connection
 
+import com.csqtt.client.ui.v2.design.V2TextSizes
 import android.app.Activity
 import android.content.ClipboardManager
 import android.content.Intent
@@ -35,6 +36,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import com.csqtt.client.ui.v2.components.V2AdaptiveScreen
+import com.csqtt.client.ui.v2.components.LocalV2AdaptiveMetrics
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.filled.Speed
@@ -44,6 +47,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -282,6 +286,8 @@ fun V2ConnectionScreen(
                 putExtra("client_ids", settingsStore.activeClientIds.first())
                 putExtra("obfs_mode", CsqttConstants.Tunnel.DEFAULT_OBFS_MODE)
                 putExtra("turn_transport", settingsStore.turnTransport.first())
+                putExtra("gooby_enabled", settingsStore.goobyEnabled.first())
+                putExtra("gooby_strategy", settingsStore.goobyStrategy.first())
                 putExtra("srtp_mode", settingsStore.srtpMode.first())
                 putExtra("custom_turn_ips", settingsStore.customTurnIps.first())
                 putExtra("generation_id", nextGen)
@@ -295,11 +301,7 @@ fun V2ConnectionScreen(
                         99,
                         true,
                     )
-                    Toast.makeText(
-                        context,
-                        "Android отклонил запуск VPN. Проверьте права приложения.",
-                        Toast.LENGTH_LONG,
-                    ).show()
+                    context.showRaisedToast("Android отклонил запуск VPN. Проверьте права приложения.")
                 }
         }
     }
@@ -370,29 +372,41 @@ fun V2ConnectionScreen(
     val canToggle = !profileChecking && !tunnelStopping &&
         (tunnelRunning || isStarting || autoPausedForWifi || !cooldownActive || !configurationValid)
     val activeVisual = tunnelRunning || isStarting || autoPausedForWifi || tunnelStopping
+    val darkSurface = colors.background.luminance() < 0.5f
+    val powerInk = when {
+        isStarting || tunnelStopping || autoPausedForWifi || profileChecking -> colors.warning
+        tunnelRunning -> colors.success
+        darkSurface -> androidx.compose.ui.graphics.Color(0xFF78ADF5)
+        else -> colors.accent
+    }
+    val powerOutline = if (!activeVisual && !profileChecking && darkSurface)
+        androidx.compose.ui.graphics.Color(0xFF3567AA) else powerInk
 
-    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+    V2AdaptiveScreen(modifier.fillMaxSize().padding(horizontal = V2Sizes.ScreenPadding)) {
+        val layout = LocalV2AdaptiveMetrics.current
         V2TopBar(version = version, onSettings = onSettings, actions = {
             V2CircleIconButton(iconPainter = painterResource(R.drawable.ic_v2_plus), contentDescription = "Добавить профиль", onClick = { showAddChoiceDialog = true })
         })
-        Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxWidth().padding(top = layout.gap, bottom = layout.gap * 2), horizontalAlignment = Alignment.CenterHorizontally) {
             androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.CircleShape,
-                color = colors.accentSoft, modifier = Modifier.size(204.dp)) {
+                color = powerOutline.copy(alpha = 0.07f), modifier = Modifier.size(layout.powerSize)) {
                 Box(contentAlignment = Alignment.Center) {
             androidx.compose.material3.Surface(onClick = { toggleTunnel() }, enabled = canToggle, shape = androidx.compose.foundation.shape.CircleShape,
-                color = if(activeVisual) colors.accent else colors.flower,
-                border = androidx.compose.foundation.BorderStroke(2.dp, colors.accent.copy(alpha = 0.65f)), modifier = Modifier.size(172.dp)) {
+                color = colors.surface,
+                border = androidx.compose.foundation.BorderStroke(2.dp, powerOutline), modifier = Modifier.size(layout.powerSize - 14.dp)) {
                 Column(verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                    val buttonText = colors.onAccent
-                    Icon(androidx.compose.material.icons.Icons.Outlined.PowerSettingsNew, if(activeVisual) "Отключить" else "Подключить", tint = buttonText, modifier = Modifier.size(56.dp))
+                    val buttonText = powerInk
+                    Icon(androidx.compose.material.icons.Icons.Outlined.PowerSettingsNew, if(activeVisual) "Отключить" else "Подключить", tint = buttonText, modifier = Modifier.size((layout.powerSize / 4).coerceIn(28.dp, 56.dp)))
                     Text(when { profileChecking -> "Проверка…"; tunnelStopping -> "Остановка…"; isStarting -> "Подключение…"; autoPausedForWifi -> "Пауза Wi-Fi"; tunnelRunning -> "Подключено"; else -> "Отключено" },
-                        fontSize = 13.sp, color = buttonText, modifier = Modifier.padding(top = 10.dp))
-                    if(tunnelRunning) Text(formatTunnelUptime(uptimeSeconds), fontSize = 13.sp, color = buttonText, modifier = Modifier.padding(top = 4.dp))
+                        fontSize = V2TextSizes.Action, color = buttonText, modifier = Modifier.padding(top = 10.dp))
+                    if(tunnelRunning) Text(formatTunnelUptime(uptimeSeconds), fontSize = V2TextSizes.Secondary, color = buttonText, modifier = Modifier.padding(top = 4.dp))
                 }
             }
                 }
             }
         }
+        com.csqtt.client.ui.WifiConnectionStatus(settingsStore, tunnelRunning, autoPausedForWifi, Modifier.padding(bottom = 8.dp))
+        com.csqtt.client.ui.WifiDiscoveryCard(settingsStore, Modifier.padding(bottom = 8.dp))
         val batterySaving by com.csqtt.client.BatterySaver.active.collectAsStateWithLifecycle()
         if (batterySaving && tunnelRunning) Text(com.csqtt.client.BatterySaver.BADGE, color = colors.warning, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
         HappServerList(settingsStore, activeProfile, tunnelBusy, { creatingProfile = false; editingProfile = it }, Modifier.weight(1f).padding(bottom = 8.dp))
@@ -583,7 +597,7 @@ private fun connectionHint(
 ): String = when {
     stopping -> "Остановка туннеля..."
     starting -> "Подключение..."
-    autoPaused -> "Приостановлено (подключён домашний Wi-Fi)"
+    autoPaused -> "Автопауза · Wi-Fi"
     running -> "Активно: ${formatTunnelUptime(uptimeSeconds)}"
     cooldown -> "Ожидание после сброса сети..."
     !configurationValid -> "Проверьте профиль перед подключением"
@@ -639,8 +653,8 @@ private fun V2ProfileCard(
                 text = displayName,
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontFamily = V2DisplayFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Normal,
+                    fontSize = V2TextSizes.Body,
                     letterSpacing = 0.5.sp,
                 ),
                 color = colors.textPrimary,

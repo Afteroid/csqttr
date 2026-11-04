@@ -4,20 +4,36 @@
   "producer": "rust-server/build_linux.bat",
   "runtime": "rust",
   "package": "csqtt",
-  "version": "2.5.0",
+  "version": "2.5.3",
   "wireProtocolRevision": "CSQTT-WIRE-3",
-  "buildInputSha256": "19C4203515567B9F0D81E8A45D7219B431F039DDA8BBBEA0D4A72EFAE579061D",
-  "cargoTomlSha256": "703F7FA4C2A51AE3F6425C60BD1ECC922A89624487C8852CF6B06BEC4BDC7A81",
-  "cargoLockSha256": "EA54F1AE9ED912A4479F15F8FCE41FC58283DA41897E390A58702CDD7A39FCB6",
+  "buildInputSha256": "8BC975B8158752C61ECCD372B4268BCA5BE1D6CD73B5DB0D3D206740978A9DD0",
+  "cargoTomlSha256": "114EA0DE685B73C8A0DE1B846379E480AB0A37167D777F88D6CFF311E62C2BD6",
+  "cargoLockSha256": "3C3CCC2B54F55409FEF5A881CCB2E87635EA0F51F11F650CEC87A1F89C40AE3B",
   "artifacts": [
     {
       "assetName": "csqtt-linux-amd64",
       "target": "x86_64-unknown-linux-musl",
       "elfClass": 2,
       "elfMachine": 62,
-      "binarySize": 11335376,
-      "binarySha256": "780F6F029947DD33BFC60F3FEA68BCC62C8FD1E243FC7AC8FEE1D2D3921905D3"
+      "binarySize": 11023000,
+      "binarySha256": "FA8243876C3CA31EE9E1E9072855B81D6EE3002468124736E477A84FD871A24A"
+    },
+    {
+      "assetName": "csqtt-linux-arm64",
+      "target": "aarch64-unknown-linux-musl",
+      "elfClass": 2,
+      "elfMachine": 183,
+      "binarySize": 9342328,
+      "binarySha256": "315BFB4D41F3C3496C334F852CEFAF73032A320C9F86BAD5B8A3696CBCECA897"
+    },
+    {
+      "assetName": "csqtt-linux-armv7",
+      "target": "armv7-unknown-linux-musleabihf",
+      "elfClass": 1,
+      "elfMachine": 40,
+      "binarySize": 8602048,
+      "binarySha256": "07A75CA4B53EF77279D7D2707B4CA7A9C923A9DE5903E2961E90DE5A69A5CF2B"
     }
   ],
-  "generatedAtUtc": "2026-10-20T14:29:18.6569213Z"
+  "generatedAtUtc": "2026-11-04T10:30:25.0685396Z"
 }

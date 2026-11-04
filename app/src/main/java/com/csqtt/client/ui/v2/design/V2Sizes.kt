@@ -5,7 +5,7 @@ import androidx.compose.ui.unit.dp
 
 @Immutable
 object V2Sizes {
-    val ScreenPadding = 16.dp
+    val ScreenPadding = 20.dp
     val TopBarHeight = 64.dp
     val BottomBarHeight = 60.dp
     val BottomBarMargin = 12.dp

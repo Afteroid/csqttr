@@ -1,3 +1,4 @@
+use crate::traffic_diagnostics::{add as traffic_add, Metric as TM};
 use crate::{
     obfs::{ObfsConfig, ObfsState, SessionCipher},
     packet::{PacketBuf, PacketPool},
@@ -821,8 +822,9 @@ impl Dispatcher {
         if let Err(returned) = self.inbound.push(packet) {
             packet = returned;
             let evicted = self.inbound.pop();
+            if evicted.is_some() { traffic_add(TM::DownlinkQueueDrops, 1); }
             drop(evicted);
-            let _ = self.inbound.push(packet);
+            if self.inbound.push(packet).is_err() { traffic_add(TM::DownlinkQueueDrops, 1); }
             let total = INBOUND_DOWNLINK_EVICTED.fetch_add(1, Ordering::Relaxed) + 1;
             if total <= 8 || total.is_multiple_of(1000) {
                 crate::log_error!(
@@ -1379,7 +1381,7 @@ impl Dispatcher {
             if failed {
                 self.mark_uplink_congested(selected_idx);
             }
-        }
+        } else { traffic_add(TM::WrapDrops, 1); }
     }
 
     fn mark_uplink_congested(&self, idx: usize) {
@@ -1432,7 +1434,7 @@ impl Dispatcher {
                     None => false,
                     Some(frag) => target.channels.allocation.send(frag).await.is_err(),
                 };
-            }
+            } else { traffic_add(TM::WrapDrops, 1); }
         }
         if failed {
             self.mark_uplink_congested(selected_idx);
@@ -1446,8 +1448,10 @@ impl Dispatcher {
         {
             return;
         }
+        traffic_add(TM::DispatchBytes, packet.len() as u64);
         let workers = self.workers.load();
         if workers.is_empty() {
+            traffic_add(TM::NoWorkerDrops, 1);
             return;
         }
 
@@ -1478,6 +1482,7 @@ impl Dispatcher {
                 self.send_fragments_to_workers(frags, &workers, flow, packet_len)
                     .await;
             } else {
+                traffic_add(TM::FragmentPoolDrops, 1);
                 crate::log_error!(
                     "[ОШИБКА] Dispatcher: фрагмент целиком потерян: {} из {} (буферы)",
                     frags.len(),
@@ -1532,6 +1537,7 @@ impl Dispatcher {
 
                 match write_res {
                     Ok(0) => {
+                        traffic_add(TM::TunWriteDrops, 1);
                         log_dropped_packet(&mut dropped, "запись вернула 0 байт");
                         pending = None;
                         state = TunWriteState::Dropped;
@@ -1565,10 +1571,12 @@ impl Dispatcher {
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        traffic_add(TM::TunWouldBlock, 1);
                         state = TunWriteState::Wait;
                         break;
                     }
                     Err(error) if is_transient_tun_error(&error) => {
+                        traffic_add(TM::TunTransientErrors, 1);
                         error_streak += 1;
                         if error_streak >= TUN_RETRY_TOLERANCE {
                             crate::log_error!(
@@ -1592,6 +1600,7 @@ impl Dispatcher {
                         return;
                     }
                     Err(error) => {
+                        traffic_add(TM::TunWriteDrops, 1);
                         log_dropped_packet(&mut dropped, &error.to_string());
                         pending = None;
                         state = TunWriteState::Dropped;

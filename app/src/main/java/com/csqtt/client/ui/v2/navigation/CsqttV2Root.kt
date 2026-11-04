@@ -51,6 +51,7 @@ import com.csqtt.client.ui.v2.components.V2Tab
 import com.csqtt.client.ui.v2.design.CsqttV2Theme
 import com.csqtt.client.ui.v2.design.V2Sizes
 import com.csqtt.client.ui.v2.design.V2Theme
+import com.csqtt.client.UiDesignPresets
 import com.csqtt.client.ui.v2.design.V2Transitions
 import com.csqtt.client.ui.v2.dialogs.V2AppUpdateDialog
 import com.csqtt.client.ui.v2.dialogs.V2ResourceHud
@@ -58,11 +59,13 @@ import com.csqtt.client.ui.v2.dialogs.V2ResourceSheet
 import com.csqtt.client.ui.v2.dialogs.V2VersionSheet
 import com.csqtt.client.ui.v2.screens.connection.V2ConnectionScreen
 import com.csqtt.client.ui.v2.screens.deploy.V2DeployScreen
+import com.csqtt.client.ui.v2.screens.deploy.V2DeployCheckState
 import com.csqtt.client.ui.v2.screens.logs.V2LogsScreen
 import com.csqtt.client.ui.v2.screens.routing.V2RoutingScreen
 import com.csqtt.client.ui.v2.screens.settings.V2AboutScreen
 import com.csqtt.client.ui.v2.screens.settings.V2SettingsScreen
 import com.csqtt.client.ui.v2.screens.settings.HappTunnelScreen
+import com.csqtt.client.ui.v2.screens.settings.TunnelDraftCache
 import com.csqtt.client.ui.v2.screens.settings.HappSettingsScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -78,7 +81,9 @@ fun CsqttV2Root(
     onVkAuthRequested: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val themeMode by settingsStore.themeMode.collectAsStateWithLifecycle(initialValue = CsqttConstants.Theme.MODE_SYSTEM)
+    val themeMode by settingsStore.themeMode.collectAsStateWithLifecycle(initialValue = CsqttConstants.Theme.MODE_DARK)
+    val design by settingsStore.uiDesign.collectAsStateWithLifecycle(initialValue = UiDesignPresets.DEFAULT)
+    val uiScalePercent by settingsStore.uiScalePercent.collectAsStateWithLifecycle(initialValue = 100)
     val isSystemDark = isSystemInDarkTheme()
     val isDark = when (themeMode) {
         CsqttConstants.Theme.MODE_LIGHT -> false
@@ -87,21 +92,25 @@ fun CsqttV2Root(
     }
     CsqttV2Theme(
         darkTheme = isDark,
-        themePalette = "nordic_slate",
+        themePalette = UiDesignPresets.darkPalette(design),
+        uiScalePercent = uiScalePercent,
     ) {
         val colors = V2Theme.colors
         val context = LocalContext.current.applicationContext
         val scope = rememberCoroutineScope()
+        val tunnelSnapshot by settingsStore.tunnelScreenSnapshot.collectAsStateWithLifecycle(initialValue = null)
+        val tunnelDraftCache = remember(settingsStore) { TunnelDraftCache() }
         val ownerMode by settingsStore.uiOwnerMode.collectAsStateWithLifecycle(initialValue = false)
         val deployStore = remember(context) { SettingsStore(context, deployScope = true) }
         // Keep this store's own snapshot ready, without reviving a saved form from another VPS.
         val deploySettings by deployStore.deploySettingsSnapshot.collectAsStateWithLifecycle(DeploySettingsSnapshot())
+        val deployCheckState = remember(deploySettings.profile) { V2DeployCheckState() }
         val participantShowLogs by settingsStore.participantShowLogs.collectAsStateWithLifecycle(false)
         val tabs = remember(ownerMode, participantShowLogs) {
             V2Tab.entries.filter { tab ->
                 when (tab) {
                     V2Tab.Deploy -> ownerMode
-                    V2Tab.Logs -> ownerMode || participantShowLogs
+                    V2Tab.Logs -> participantShowLogs
                     else -> true
                 }
             }
@@ -109,6 +118,14 @@ fun CsqttV2Root(
         var selectedTabName by rememberSaveable { mutableStateOf(V2Tab.Connection.name) }
         val tabStateHolder = rememberSaveableStateHolder()
         var overlay by rememberSaveable { mutableStateOf<String?>(null) }
+        val openWifiHome by com.csqtt.client.WifiDiscovery.openHome.collectAsStateWithLifecycle()
+        LaunchedEffect(openWifiHome) {
+            if (openWifiHome) {
+                overlay = null
+                selectedTabName = V2Tab.Connection.name
+                com.csqtt.client.WifiDiscovery.openHome.value = false
+            }
+        }
         var profilePickerRequest by rememberSaveable { mutableIntStateOf(0) }
         var pendingRelease by remember { mutableStateOf<AppReleaseInfo?>(null) }
         var showVersionSheet by rememberSaveable { mutableStateOf(false) }
@@ -274,7 +291,7 @@ fun CsqttV2Root(
                                             },
                                         )
 
-                                        V2Tab.Tunnel -> HappTunnelScreen(settingsStore, version, { overlay = OVERLAY_SETTINGS }, onVkAuthRequested)
+                                        V2Tab.Tunnel -> HappTunnelScreen(settingsStore, version, { overlay = OVERLAY_SETTINGS }, onVkAuthRequested, tunnelSnapshot, tunnelDraftCache)
 
                                         V2Tab.Logs -> V2LogsScreen(
                                             version = version,
@@ -285,6 +302,7 @@ fun CsqttV2Root(
                                         V2Tab.Deploy -> V2DeployScreen(
                                             settingsStore = deployStore,
                                             savedSettings = deploySettings,
+                                            checkState = deployCheckState,
                                             version = version,
                                             onSettings = { overlay = OVERLAY_SETTINGS },
                                             onVersionClick = { showVersionSheet = true },
@@ -307,7 +325,7 @@ fun CsqttV2Root(
                             },
                             tabs = tabs,
                             modifier = Modifier.padding(
-                                horizontal = V2Sizes.ScreenPadding,
+                                horizontal = 8.dp,
                                 vertical = 8.dp,
                             ),
                         )

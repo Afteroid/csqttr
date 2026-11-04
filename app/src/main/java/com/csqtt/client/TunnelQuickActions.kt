@@ -33,6 +33,8 @@ internal suspend fun buildQuickStartIntent(context: Context): Intent? {
         putExtra("fingerprint", store.selectedFingerprint.first())
         putExtra("obfs_mode", store.obfsMode.first())
         putExtra("turn_transport", store.turnTransport.first())
+        putExtra("gooby_enabled", store.goobyEnabled.first())
+                putExtra("gooby_strategy", store.goobyStrategy.first())
         putExtra("srtp_mode", store.srtpMode.first())
         putExtra("custom_turn_ips", store.customTurnIps.first())
     }

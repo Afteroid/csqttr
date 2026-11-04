@@ -100,6 +100,7 @@ class TunnelService : Service() {
     private val vkProbeLock = Any()
     private var vkRecoveryJob: Job? = null
     private var autoPauseSettingsJob: Job? = null
+    private var wifiDiscoveryJob: Job? = null
     private var autoPauseWifiWatchJob: Job? = null
     private var domainRoutingSettingsJob: Job? = null
     private val autoPauseMutex = Mutex()
@@ -135,12 +136,16 @@ class TunnelService : Service() {
         super.onCreate()
         TunnelManager.activeScope = serviceScope
         createNotificationChannel()
+        WifiDiscovery.acquire(this, this)
 
         acquireWakeLock()
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         registerAirplaneModeReceiver()
         registerPhysicalNetworkCallback()
         observeAutoPauseOnWifi()
+        wifiDiscoveryJob = serviceScope.launch {
+            WifiDiscovery.current.collect { requestWifiAutoPauseReconciliation() }
+        }
         observeDomainRoutingSettings()
         observeBatterySaver()
     }
@@ -172,9 +177,10 @@ class TunnelService : Service() {
                 startJob = serviceScope.launch {
                     try {
                         val store = SettingsStore(applicationContext)
-                        autoPauseOnWifiEnabled = store.autoPauseOnWifi.first()
-                        wifiNetworkListMode = WifiNetworkListMode.fromStored(store.wifiNetworkListMode.first())
-                        wifiNetworkListSsids = decodeWifiSsids(store.wifiNetworkListSsids.first())
+                        val wifi = store.wifiPreferences.first()
+                        autoPauseOnWifiEnabled = wifi.enabled
+                        wifiNetworkListMode = wifi.mode
+                        wifiNetworkListSsids = wifi.selected
                         TunnelManager.isLoggingEnabled = store.loggingEnabled.first()
                         if (reconcileWifiAutoPause()) {
                             TunnelManager.starting.value = false
@@ -280,6 +286,8 @@ class TunnelService : Service() {
                                 ?.takeIf { it == CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS }
                                 ?: CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT,
                             srtpMode = sanitizeSrtpMode(intent.getStringExtra("srtp_mode")),
+                            goobyEnabled = intent.getBooleanExtra("gooby_enabled", store.goobyEnabled.first()),
+                            goobyStrategy = GoobyPolicy.normalizeStrategy(intent.getStringExtra("gooby_strategy") ?: store.goobyStrategy.first()),
                             customTurnIps = intent.getStringExtra("custom_turn_ips") ?: "",
                             generationId = genId,
                             sessionSalt = salt,
@@ -362,7 +370,7 @@ class TunnelService : Service() {
                 if (!TunnelManager.running.value) {
                     stopTunnel()
                 } else {
-                    updateNotification("Туннель активен")
+                    updateNotification(buildTunnelNotificationText())
                 }
             }
             "RESTORE_NOTIFICATION" -> {
@@ -402,9 +410,10 @@ class TunnelService : Service() {
                     return@launch
                 }
                 autoPauseRequested = true
-                autoPauseOnWifiEnabled = store.autoPauseOnWifi.first()
-                wifiNetworkListMode = WifiNetworkListMode.fromStored(store.wifiNetworkListMode.first())
-                wifiNetworkListSsids = decodeWifiSsids(store.wifiNetworkListSsids.first())
+                val wifi = store.wifiPreferences.first()
+                autoPauseOnWifiEnabled = wifi.enabled
+                wifiNetworkListMode = wifi.mode
+                wifiNetworkListSsids = wifi.selected
                 TunnelManager.isLoggingEnabled = store.loggingEnabled.first()
                 if (reconcileWifiAutoPause()) return@launch
 
@@ -495,6 +504,8 @@ class TunnelService : Service() {
                     connectionPassword = source.password,
                     obfsMode = store.obfsMode.first(),
                     turnTransport = store.turnTransport.first(),
+                    goobyEnabled = store.goobyEnabled.first(),
+                    goobyStrategy = store.goobyStrategy.first(),
                     srtpMode = sanitizeSrtpMode(store.srtpMode.first()),
                     customTurnIps = store.customTurnIps.first(),
                     vkAuthMode = vkAuthMode,
@@ -1061,16 +1072,13 @@ class TunnelService : Service() {
         autoPauseSettingsJob?.cancel()
         autoPauseSettingsJob = serviceScope.launch {
             val store = SettingsStore(applicationContext)
-            combine(
-                store.autoPauseOnWifi,
-                store.wifiNetworkListMode,
-                store.wifiNetworkListSsids,
-            ) { enabled, mode, ssids ->
-                Triple(enabled, WifiNetworkListMode.fromStored(mode), decodeWifiSsids(ssids))
-            }.distinctUntilChanged().collect { (enabled, mode, ssids) ->
-                autoPauseOnWifiEnabled = enabled
-                wifiNetworkListMode = mode
-                wifiNetworkListSsids = ssids
+            store.wifiPreferences.collect { wifi ->
+                autoPauseOnWifiEnabled = wifi.enabled
+                wifiNetworkListMode = wifi.mode
+                wifiNetworkListSsids = wifi.selected
+                if (!wifi.enabled && foregroundStarted && wifiSsidLocationForegroundStarted) {
+                    startPersistentForeground(createNotification(currentNotificationText()))
+                }
                 reconcileWifiAutoPause()
             }
         }
@@ -1124,7 +1132,7 @@ class TunnelService : Service() {
             ) {
                 WifiAutoPauseAction.PAUSE -> enterWifiAutoPause()
                 WifiAutoPauseAction.RESUME -> resumeFromWifiAutoPause()
-                WifiAutoPauseAction.NONE -> Unit
+                WifiAutoPauseAction.NONE -> if (autoPausedForWifi) updateNotification(WifiCopy.paused(currentPauseSsid()))
             }
             autoPausedForWifi
         }
@@ -1155,7 +1163,7 @@ class TunnelService : Service() {
         if (!completed) return
         releaseWakeLock()
         releaseWifiLock()
-        updateNotification("Ожидание. Автопауза при Wi-Fi")
+        updateNotification(WifiCopy.paused(currentPauseSsid()))
         startWifiAutoPauseWatch()
     }
 
@@ -1201,7 +1209,7 @@ class TunnelService : Service() {
 
     private fun updatePhysicalWifiNetwork(network: Network, capabilities: NetworkCapabilities) {
         val physicalWifi = hasPhysicalWifiCapability(capabilities)
-        val ssid = if (physicalWifi) {
+        val ssid = if (physicalWifi && Build.VERSION.SDK_INT >= 29 && hasWifiSsidAccess(this)) {
             normalizeWifiSsid((capabilities.transportInfo as? WifiInfo)?.ssid)
         } else {
             null
@@ -1209,7 +1217,7 @@ class TunnelService : Service() {
         synchronized(wifiNetworkLock) {
             if (physicalWifi) {
                 physicalWifiNetworks.add(network)
-                if (ssid != null) physicalWifiSsids[network] = ssid
+                if (ssid != null) physicalWifiSsids[network] = ssid else physicalWifiSsids.remove(network)
             } else {
                 physicalWifiNetworks.remove(network)
                 physicalWifiSsids.remove(network)
@@ -1232,20 +1240,25 @@ class TunnelService : Service() {
     }
 
     private fun ensureWifiSsidForegroundAccess() {
+        if (!autoPauseOnWifiEnabled) return
         if (wifiSsidLocationForegroundStarted) return
-        if (!foregroundStarted || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || !hasWifiSsidPermission(this)) return
+        if (!foregroundStarted || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || !hasWifiSsidAccess(this)) return
         val notification = createNotification(lastNotificationText ?: currentNotificationText())
         // Re-issuing startForeground upgrades the already-running VPN service to the location FGS type.
         // This keeps SSID reads available when the activity is no longer visible.
         startPersistentForeground(notification)
     }
 
+    private fun currentPauseSsid(): String? = if (hasWifiSsidAccess(this)) {
+        currentWifiSsid(applicationContext) ?: synchronized(wifiNetworkLock) { physicalWifiSsids.values.firstOrNull() }
+    } else null
+
     private fun shouldPauseForCurrentWifi(): Boolean {
+        if (!autoPauseOnWifiEnabled) return false
         ensureWifiSsidForegroundAccess()
         val wifiConnected = wifiConnectedForAutoPause()
         val ssid = if (wifiConnected) {
-            synchronized(wifiNetworkLock) { physicalWifiSsids.values.firstOrNull() }
-                ?: currentWifiSsid(applicationContext)
+            currentPauseSsid()
         } else {
             null
         }
@@ -1445,10 +1458,14 @@ class TunnelService : Service() {
     }
 
     private fun buildTunnelNotificationText(): String {
+        if (autoPausedForWifi) return WifiCopy.paused(currentPauseSsid())
+        if (TunnelManager.running.value) {
+            return TunnelTrafficText.notification(TunnelManager.traffic.value, TunnelManager.activeWorkers.value)
+        }
         val statsText = TunnelManager.stats.value.trim()
         return when {
-            statsText.isEmpty() -> "Туннель активен"
-            statsText == "Ожидание данных..." -> "Туннель активен"
+            statsText.isEmpty() -> "Подключение..."
+            statsText == "Ожидание данных..." -> "Подключение..."
             else -> statsText
         }
     }
@@ -1490,7 +1507,7 @@ class TunnelService : Service() {
 
         return NotificationCompat.Builder(this, TUNNEL_NOTIFICATION_CHANNEL_ID)
             .setContentTitle("CSQTT")
-            .setContentText(text)
+            .withTunnelText(text)
             .setSmallIcon(R.drawable.ic_stat_c)
             .setOngoing(true)
             .setLocalOnly(true)
@@ -1516,7 +1533,7 @@ class TunnelService : Service() {
 
     private fun startPersistentForeground(notification: Notification) {
         notification.flags = notification.flags or Notification.FLAG_ONGOING_EVENT or Notification.FLAG_NO_CLEAR or Notification.FLAG_FOREGROUND_SERVICE
-        val includeWifiLocation = hasWifiSsidPermission(this)
+        val includeWifiLocation = autoPauseOnWifiEnabled && hasWifiSsidAccess(this)
         var locationTypeStarted = false
         if (Build.VERSION.SDK_INT >= 34) {
             val serviceTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
@@ -1571,12 +1588,15 @@ class TunnelService : Service() {
     }
 
     override fun onDestroy() {
+        WifiDiscovery.release(this)
         isStopping = true
         startJob?.cancel()
         startJob = null
         startGeneration++
         autoPauseSettingsJob?.cancel()
         autoPauseSettingsJob = null
+        wifiDiscoveryJob?.cancel()
+        wifiDiscoveryJob = null
         domainRoutingSettingsJob?.cancel()
         domainRoutingSettingsJob = null
         batterySaverJob?.cancel()

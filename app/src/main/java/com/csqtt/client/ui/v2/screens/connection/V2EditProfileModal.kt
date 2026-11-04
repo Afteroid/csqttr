@@ -88,7 +88,10 @@ fun V2EditProfileModal(
     var portInput by rememberSaveable(profile) { mutableStateOf("") }
     var passwordInput by rememberSaveable(profile) { mutableStateOf("") }
     var passwordUnreadable by rememberSaveable(profile) { mutableStateOf(false) }
-    var passwordVisible by rememberSaveable(profile) { mutableStateOf(false) }
+    var passwordVisible by remember(profile) { mutableStateOf(false) }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+        passwordVisible = false
+    }
     var workers by rememberSaveable(profile) { mutableFloatStateOf(10f) }
     var linkInput by rememberSaveable(profile) { mutableStateOf("") }
     var participantMode by rememberSaveable(profile) { mutableStateOf(false) }
@@ -118,6 +121,7 @@ fun V2EditProfileModal(
     }
 
     LaunchedEffect(profile) {
+        if (loaded) return@LaunchedEffect
         val snapshot = settingsStore.readProfileConnectionSettings(profile)
         val configuredAuthMode = SettingsStore(context, readOnlyProfile = profile).vkAuthMode.first()
         profileWorkerMaximum = com.csqtt.client.WorkerCountPolicy.defaultMaximum(snapshot.extraWorkers && configuredAuthMode != "auto_js")
@@ -248,42 +252,19 @@ fun V2EditProfileModal(
                     V2PillButton(
                         text = "Сохранить",
                         onClick = { save() },
+                        enabled = loaded,
                         style = V2PillStyle.Contrast,
                         modifier = Modifier.weight(1f),
                         height = 50.dp,
                     )
                 }
                 if (!isNew) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(V2Shapes.Pill)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = { showDeleteConfirm = true },
-                            )
-                            .padding(vertical = 10.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Delete,
-                            contentDescription = null,
-                            tint = colors.error,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Удалить профиль",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontFamily = V2DisplayFamily,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                            ),
-                            color = colors.error,
-                        )
-                    }
+                    V2PillButton(
+                        text = "Удалить профиль", icon = Icons.Filled.Delete,
+                        onClick = { showDeleteConfirm = true }, enabled = loaded,
+                        style = V2PillStyle.Danger, modifier = Modifier.fillMaxWidth(),
+                        height = 44.dp,
+                    )
                 }
             }
         },
@@ -399,19 +380,11 @@ fun V2EditProfileModal(
                 Text(
                     text = if (passwordVisible) "Скрыть пароль" else "Показать пароль",
                     style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.Normal,
                     color = colors.textSecondary,
                 )
             }
 
-            V2PowerSlider(
-                value = workers,
-                maximum = workersCap.toFloat(),
-                enabled = !workersLocked,
-                onValueChange = { workers = it },
-                onInfo = { showWorkersInfoDialog = true },
-                fixedWorkers = fixedWorkers,
-            )
         }
     }
 

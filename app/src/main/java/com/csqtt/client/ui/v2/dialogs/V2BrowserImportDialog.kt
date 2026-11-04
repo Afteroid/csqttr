@@ -131,7 +131,7 @@ fun V2BrowserImportDialog(
                     text = "Название профиля",
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontFamily = V2DisplayFamily,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 13.sp,
                     ),
                     color = colors.textSecondary,
@@ -168,7 +168,7 @@ fun V2BrowserImportDialog(
                             text = "${link.host}:${link.port}",
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontFamily = V2BodyFamily,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Normal,
                             ),
                             color = colors.textPrimary,
                         )
@@ -191,7 +191,7 @@ fun V2BrowserImportDialog(
                                 text = "${link.power}",
                                 style = MaterialTheme.typography.bodyMedium.copy(
                                     fontFamily = V2BodyFamily,
-                                    fontWeight = FontWeight.Bold,
+                                    fontWeight = FontWeight.Normal,
                                 ),
                                 color = colors.accent,
                             )
@@ -215,7 +215,7 @@ fun V2BrowserImportDialog(
                                 text = "${link.hashes.size}",
                                 style = MaterialTheme.typography.bodyMedium.copy(
                                     fontFamily = V2BodyFamily,
-                                    fontWeight = FontWeight.Bold,
+                                    fontWeight = FontWeight.Normal,
                                 ),
                                 color = colors.accent,
                             )
@@ -238,7 +238,7 @@ fun V2BrowserImportDialog(
                             text = if (targetSlot != null) "Новый" else "—",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontFamily = V2DisplayFamily,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Normal,
                             ),
                             color = colors.textPrimary,
                         )

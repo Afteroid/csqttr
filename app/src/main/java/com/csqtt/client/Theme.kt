@@ -184,7 +184,7 @@ private val ForestDarkColorScheme = darkColorScheme(
     outlineVariant = Color(0xFF48454E),
 )
 
-private val BrandLightColorScheme = lightColorScheme(
+internal val BrandLightColorScheme = lightColorScheme(
     primary = Color(0xFF1A73E8),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFE8F0FE),
@@ -208,7 +208,7 @@ private val BrandLightColorScheme = lightColorScheme(
     surfaceTint = Color.Transparent,
 )
 
-private val BrandDarkColorScheme = darkColorScheme(
+internal val BrandDarkColorScheme = darkColorScheme(
     primary = Color(0xFF1565D8),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFF173B72),

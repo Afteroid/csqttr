@@ -1,0 +1,17 @@
+{
+  "csqtt-linux-amd64": {
+    "url": "https://github.com/Fikisq/csqttr/releases/download/server-core-debug46-20261104/csqtt-linux-amd64",
+    "size": 11023000,
+    "sha256": "fa8243876c3ca31ee9e1e9072855b81d6ee3002468124736e477a84fd871a24a"
+  },
+  "csqtt-linux-arm64": {
+    "url": "https://github.com/Fikisq/csqttr/releases/download/server-core-debug46-20261104/csqtt-linux-arm64",
+    "size": 9342328,
+    "sha256": "315bfb4d41f3c3496c334f852cefaf73032a320c9f86bad5b8a3696cbceca897"
+  },
+  "csqtt-linux-armv7": {
+    "url": "https://github.com/Fikisq/csqttr/releases/download/server-core-debug46-20261104/csqtt-linux-armv7",
+    "size": 8602048,
+    "sha256": "07a75ca4b53ef77279d7d2707b4ca7a9c923a9de5903e2961e90de5a69a5cf2b"
+  }
+}

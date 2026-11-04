@@ -13,6 +13,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
@@ -200,6 +201,7 @@ class SettingsStore(context: Context, deployScope: Boolean = false, readOnlyProf
         private val PROTOCOL = stringPreferencesKey("protocol")
         private val LISTEN_PORT = intPreferencesKey("listen_port")
         private val MANUAL_PORTS_ENABLED = booleanPreferencesKey("manual_ports_enabled")
+        private val DEPLOY_MANUAL_PORTS = booleanPreferencesKey("deploy_manual_ports")
         private val SERVER_PEER_PORT = intPreferencesKey("server_peer_port")
         private val SNI = stringPreferencesKey("sni")
         private val NO_DNS = booleanPreferencesKey("no_dns")
@@ -237,6 +239,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         private val SSH_CERTIFICATE = stringPreferencesKey("ssh_certificate")
         private val SSH_CERTIFICATE_ENCRYPTED = stringPreferencesKey("ssh_certificate_encrypted")
         private val EXCLUDED_APPS = stringPreferencesKey("excluded_apps")
+        private val APP_ROUTING_ALL = booleanPreferencesKey("app_routing_all")
+        private val APP_PRESETS_USED = stringPreferencesKey("app_presets_used")
         private val WHITELIST_APPS = stringPreferencesKey("whitelist_apps")
 
         private val DETAILED_LOGS = booleanPreferencesKey("detailed_logs")
@@ -258,6 +262,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         private val VK_AUTH_MODE = stringPreferencesKey("vk_auth_mode") 
         private val OBFS_MODE = stringPreferencesKey("obfs_mode") 
         private val TURN_TRANSPORT = stringPreferencesKey("turn_transport")
+        private val GOOBY_STRATEGY = stringPreferencesKey("gooby_strategy")
+        private val GOOBY_ENABLED = booleanPreferencesKey("gooby_enabled")
         private val SRTP_MODE = stringPreferencesKey("srtp_mode")
         private val CAPTCHA_MODE = stringPreferencesKey("captcha_mode")
         private val CAPTCHA_SOLVE_METHOD = stringPreferencesKey("captcha_solve_method") 
@@ -271,6 +277,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         private val VK_ACCOUNT_TOKEN_ENCRYPTED = stringPreferencesKey("vk_account_token_encrypted")
         private val VK_ACCOUNT_USER_ID = stringPreferencesKey("vk_account_user_id")
         private val UI_DESIGN = stringPreferencesKey("ui_design")
+        private val UI_SCALE = intPreferencesKey("ui_scale_percent")
         private val BATTERY_SAVER_MODE = stringPreferencesKey("battery_saver_mode")
         private val BATTERY_SAVER_PERCENT = intPreferencesKey("battery_saver_percent")
         private val DEPLOY_CONNECTION_PROFILE = intPreferencesKey("deploy_connection_profile")
@@ -337,6 +344,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
 
         @Volatile
         internal var cachedTurnTransport: String? = null
+        @Volatile
+        internal var cachedGoobyEnabled: Boolean = false
 
         @Volatile
         internal var cachedSrtpMode: String? = null
@@ -414,7 +423,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             return when (baseKey) {
                 PEER, VK_HASHES, SECONDARY_VK_HASH, PROTOCOL, SNI, USER_AGENT, DEPLOY_IP, DEPLOY_LOGIN, DEPLOY_PASSWORD, DEPLOY_PASSWORD_ENCRYPTED, DEPLOY_SSH_PORT, EXCLUDED_APPS, WHITELIST_APPS, DIRECT_DOMAINS, DIRECT_DOMAINS_BLACK, DIRECT_DOMAINS_WHITE, DIRECT_IPS_BLACK, DIRECT_IPS_WHITE, CONNECTION_PASSWORD, CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD_LOCAL, DEPLOY_MAIN_PASSWORD, DEPLOY_MAIN_PASSWORD_ENCRYPTED, DEPLOY_WEB_LOGIN, DEPLOY_WEB_PASSWORD, DEPLOY_WEB_PASSWORD_ENCRYPTED, PROXY_MODE, PROXY_HOST, VK_AUTH_MODE, OBFS_MODE, TURN_TRANSPORT, SRTP_MODE, CAPTCHA_MODE, CAPTCHA_SOLVE_METHOD, CAPTCHA_WBV_SOLVE_METHOD, CSQTT_LINK, SELECTED_FINGERPRINT, ACTIVE_CLIENT_IDS, VK_HASH_MODE, VK_ACCESS_TOKEN, VK_ACCESS_TOKEN_ENCRYPTED, VK_ACCESS_TOKEN_USER_ID, SSH_PRIVATE_KEY, SSH_PRIVATE_KEY_ENCRYPTED, SSH_KEY_PASSPHRASE, SSH_KEY_PASSPHRASE_ENCRYPTED, SSH_CERTIFICATE, SSH_CERTIFICATE_ENCRYPTED, VK_HASH_CHECK_RESULTS, CLIENT_ID_CHECK_RESULTS, CUSTOM_TURN_IPS, SELECTED_TURN_SUBNET, SUBSCRIPTION_URL, SUBSCRIPTION_TITLE, SUBSCRIPTION_UUID, SUBSCRIPTION_NODE -> stringPreferencesKey(newName) as Preferences.Key<T>
                 WORKERS_PER_HASH, LISTEN_PORT, SERVER_PEER_PORT, PROXY_PORT, SERVER_WEB_PORT, SUBSCRIPTION_POWER, DEPLOY_CONNECTION_PROFILE -> intPreferencesKey(newName) as Preferences.Key<T>
-                MANUAL_PORTS_ENABLED, NO_DNS, IS_WHITELIST, CSQTT_LINK_MODE, DETAILED_LOGS, SSH_KEYS_MODE, DOCKER_INSTALL, EXTRA_WORKERS, SPLIT_TUNNEL_WHITELIST_MIGRATED, DOMAIN_ROUTING_ENABLED, DOMAIN_IS_WHITELIST, EXCLUDE_RU_ZONES_ENABLED, TEMPLATE_DOMAINS_ENABLED, IP_ROUTING_ENABLED, IP_IS_WHITELIST, DEPLOY_SERVER_CONFIGURED, PROFILE_REMOVED -> booleanPreferencesKey(newName) as Preferences.Key<T>
+                APP_ROUTING_ALL, MANUAL_PORTS_ENABLED, DEPLOY_MANUAL_PORTS, NO_DNS, IS_WHITELIST, CSQTT_LINK_MODE, DETAILED_LOGS, SSH_KEYS_MODE, DOCKER_INSTALL, EXTRA_WORKERS, SPLIT_TUNNEL_WHITELIST_MIGRATED, DOMAIN_ROUTING_ENABLED, DOMAIN_IS_WHITELIST, EXCLUDE_RU_ZONES_ENABLED, TEMPLATE_DOMAINS_ENABLED, IP_ROUTING_ENABLED, IP_IS_WHITELIST, DEPLOY_SERVER_CONFIGURED, PROFILE_REMOVED, GOOBY_ENABLED -> booleanPreferencesKey(newName) as Preferences.Key<T>
                 CONNECTION_GENERATION, PROFILE_REVISION -> longPreferencesKey(newName) as Preferences.Key<T>
                 else -> stringPreferencesKey(newName) as Preferences.Key<T>
             }
@@ -427,14 +436,20 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         else -> appContext.dataStore
     }
     val uiOwnerMode: Flow<Boolean> = appContext.dataStore.data.map { it[UI_OWNER_MODE] ?: false }
-    val uiDesign: Flow<String> = appContext.dataStore.data.map { if (it[UI_DESIGN] == "classic") "classic" else "v2" }
-    suspend fun saveUiDesign(design: String) { require(design in listOf("classic", "v2")); appContext.dataStore.edit { it[UI_DESIGN] = design } }
+    val uiDesign: Flow<String> = appContext.dataStore.data.map { UiDesignPresets.normalize(it[UI_DESIGN]) }
+    val uiScalePercent: Flow<Int> = appContext.dataStore.data.map { UiScale.normalize(it[UI_SCALE]) }.distinctUntilChanged()
+    suspend fun saveUiScalePercent(percent: Int) {
+        require(percent in UiScale.choices)
+        appContext.dataStore.edit { it[UI_SCALE] = percent }
+    }
+    suspend fun saveUiDesign(design: String) { require(UiDesignPresets.options.any { it.first == design }); appContext.dataStore.edit { it[UI_DESIGN] = design } }
     val batterySaverMode: Flow<String> = appContext.dataStore.data.map { prefs -> prefs[BATTERY_SAVER_MODE]?.takeIf { mode -> BatterySaver.MODES.any { it.first == mode } } ?: BatterySaver.DEFAULT_MODE }
     val batterySaverPercent: Flow<Int> = appContext.dataStore.data.map { (it[BATTERY_SAVER_PERCENT] ?: BatterySaver.DEFAULT_PERCENT).coerceIn(5, 95) }
     suspend fun saveBatterySaverMode(mode: String) { require(BatterySaver.MODES.any { it.first == mode }); appContext.dataStore.edit { it[BATTERY_SAVER_MODE] = mode } }
     suspend fun saveBatterySaverPercent(percent: Int) { appContext.dataStore.edit { it[BATTERY_SAVER_PERCENT] = percent.coerceIn(5, 95) } }
     suspend fun saveUiOwnerMode(owner: Boolean) { appContext.dataStore.edit { it[UI_OWNER_MODE] = owner } }
     private val secureStore = SecureStringStore(appContext)
+    private val savedVkAccounts = SavedVkAccounts(secureStore::encrypt, secureStore::decrypt)
 
     val activeProfile: Flow<Int> = dataStore.data.map {
         (it[ACTIVE_PROFILE] ?: CsqttConstants.Profiles.MIN_INDEX).coerceIn(
@@ -446,7 +461,9 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         it[TUNNEL_LAST_DIAGNOSTIC] ?: ""
     }
     val showSystemApps: Flow<Boolean> = dataStore.data.map { it[SHOW_SYSTEM_APPS] ?: false }
-    val loggingEnabled: Flow<Boolean> = dataStore.data.map { it[LOGGING_ENABLED] ?: true }
+    // Recording is always enabled; the UI preference only controls tab visibility.
+    // Ignore historical false values, including those imported from older backups.
+    val loggingEnabled: Flow<Boolean> = dataStore.data.map { true }
     val infoActionsExpanded: Flow<Boolean> = dataStore.data.map { it[INFO_ACTIONS_EXPANDED] ?: false }
     val infoProjectExpanded: Flow<Boolean> = dataStore.data.map { it[INFO_PROJECT_EXPANDED] ?: false }
     val csqttLink: Flow<String> = dataStore.data.map { prefs ->
@@ -459,7 +476,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
     }
     val participantShowLogs: Flow<Boolean> = dataStore.data.map { prefs ->
         val profile = prefs[ACTIVE_PROFILE] ?: 0
-        prefs[getProfileKey(PARTICIPANT_SHOW_LOGS, profile)] ?: false
+        prefs[getProfileKey(PARTICIPANT_SHOW_LOGS, profile)] ?: (prefs[UI_OWNER_MODE] ?: false)
     }
 
     val peer: Flow<String> = dataStore.data.map { prefs ->
@@ -541,7 +558,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             sshPort = prefs[getProfileKey(DEPLOY_SSH_PORT, profile)]
                 ?.ifBlank { CsqttConstants.Network.DEFAULT_SSH_PORT.toString() }
                 ?: CsqttConstants.Network.DEFAULT_SSH_PORT.toString(),
-            manualPortsEnabled = prefs[getProfileKey(MANUAL_PORTS_ENABLED, profile)] ?: false,
+            manualPortsEnabled = prefs[getProfileKey(DEPLOY_MANUAL_PORTS, profile)] ?: prefs[getProfileKey(MANUAL_PORTS_ENABLED, profile)] ?: false,
             serverPeerPort = prefs[getProfileKey(SERVER_PEER_PORT, profile)]
                 ?: CsqttConstants.Network.DEFAULT_SERVER_PEER_PORT,
             serverWebPort = prefs[getProfileKey(SERVER_WEB_PORT, profile)]
@@ -574,6 +591,14 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             csqttLinkMode = prefs[getProfileKey(CSQTT_LINK_MODE, profile)] ?: false,
         )
     }.onIo()
+    val appRoutingAll: Flow<Boolean?> = dataStore.data.map { prefs ->
+        prefs[getProfileKey(APP_ROUTING_ALL, prefs[ACTIVE_PROFILE] ?: 0)]
+    }
+
+    val appPresetsUsed: Flow<Set<String>> = dataStore.data.map { prefs ->
+        prefs[getProfileKey(APP_PRESETS_USED, prefs[ACTIVE_PROFILE] ?: 0)].orEmpty().split(',').filter(String::isNotBlank).toSet()
+    }
+
     val excludedApps: Flow<String> = dataStore.data.map { prefs ->
         val profile = prefs[ACTIVE_PROFILE] ?: 0
         prefs[getProfileKey(EXCLUDED_APPS, profile)] ?: ""
@@ -629,6 +654,14 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS -> CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS
             else -> CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT
         }
+    }
+
+    val goobyStrategy: Flow<String> = dataStore.data.map { prefs ->
+        GoobyPolicy.normalizeStrategy(prefs[getProfileKey(GOOBY_STRATEGY, prefs[ACTIVE_PROFILE] ?: 0)])
+    }
+
+    val goobyEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[getProfileKey(GOOBY_ENABLED, prefs[ACTIVE_PROFILE] ?: 0)] ?: false
     }
 
     val srtpMode: Flow<String> = dataStore.data.map { prefs ->
@@ -697,6 +730,10 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         val profile = prefs[ACTIVE_PROFILE] ?: 0
         if (hasImportedVkToken(prefs, profile)) "" else personalVkAccount(prefs).second
     }
+
+    internal val savedVkAccountIds: Flow<List<String>> = dataStore.data.map { prefs ->
+        (savedVkAccounts.available(prefs) + legacyPersonalVkAccounts(prefs).keys).distinct()
+    }.onIo()
 
     val isWhitelist: Flow<Boolean> = dataStore.data.map { prefs ->
         val profile = prefs[ACTIVE_PROFILE] ?: 0
@@ -844,9 +881,11 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
     }
 
     internal suspend fun readProfileConnectionSettings(profile: Int): ProfileConnectionSnapshot =
-        dataStore.data.map { prefs ->
+        profileConnectionSettings(dataStore.data.first(), profile)
+
+    private fun profileConnectionSettings(prefs: Preferences, profile: Int): ProfileConnectionSnapshot {
             val secret = readConnectionPasswordState(prefs, profile)
-            ProfileConnectionSnapshot(
+            return ProfileConnectionSnapshot(
                 revision = prefs[getProfileKey(PROFILE_REVISION, profile)] ?: 0L,
                 peer = prefs[getProfileKey(PEER, profile)] ?: "",
                 serverPeerPort = prefs[getProfileKey(SERVER_PEER_PORT, profile)]
@@ -863,7 +902,45 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 subscriptionTitle = prefs[getProfileKey(SUBSCRIPTION_TITLE, profile)] ?: "",
                 subscriptionPower = prefs[getProfileKey(SUBSCRIPTION_POWER, profile)] ?: 0,
             )
-        }.first()
+    }
+
+    internal val tunnelScreenSnapshot: Flow<TunnelScreenSnapshot> = dataStore.data.map { prefs ->
+        val profile = prefs[ACTIVE_PROFILE] ?: 0
+        TunnelScreenSnapshot(
+            profile = profile,
+            name = prefs[getProfileKey(PROFILE_NAME, profile)] ?: defaultProfileName(profile),
+            connection = profileConnectionSettings(prefs, profile),
+            hashes = prefs[getProfileKey(VK_HASHES, profile)].orEmpty(),
+            hashMode = when (prefs[getProfileKey(VK_HASH_MODE, profile)]) {
+                "auto", CsqttConstants.VkAutoHash.MODE_AUTO_API -> CsqttConstants.VkAutoHash.MODE_AUTO_API
+                CsqttConstants.VkAutoHash.MODE_AUTO_JS -> CsqttConstants.VkAutoHash.MODE_AUTO_JS
+                else -> CsqttConstants.VkAutoHash.MODE_MANUAL
+            },
+            authMode = when (prefs[getProfileKey(VK_AUTH_MODE, profile)]) {
+                CsqttConstants.VkAuth.MODE_CAPTCHA -> CsqttConstants.VkAuth.MODE_CAPTCHA
+                CsqttConstants.VkAuth.MODE_AUTO_JS -> CsqttConstants.VkAuth.MODE_AUTO_JS
+                else -> CsqttConstants.VkAuth.MODE_CALLS
+            },
+            token = effectiveVkToken(prefs, profile),
+            srtp = when (prefs[getProfileKey(SRTP_MODE, profile)]) {
+                CsqttConstants.SrtpMode.WRAP -> CsqttConstants.SrtpMode.WRAP
+                CsqttConstants.SrtpMode.DTLS -> CsqttConstants.SrtpMode.DTLS
+                else -> CsqttConstants.SrtpMode.DEFAULT
+            },
+            transport = when (prefs[getProfileKey(TURN_TRANSPORT, profile)]) {
+                CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS -> CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS
+                else -> CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT
+            },
+            subnet = prefs[getProfileKey(SELECTED_TURN_SUBNET, profile)].orEmpty(),
+            ipLimit = prefs[getProfileKey(TURN_SUBNET_IP_LIMIT, profile)] ?: "ALL",
+            hashResults = prefs[getProfileKey(VK_HASH_CHECK_RESULTS, profile)] ?: "{}",
+            removedOwnerHashes = prefs[getProfileKey(LINK_HASHES_REMOVED, profile)].orEmpty().split(',').filter(String::isNotBlank).toSet(),
+            autoJsAcknowledged = prefs[AUTO_JS_RISK_ACKNOWLEDGED] ?: false,
+            tcpAcknowledged = prefs[TCP_TRANSPORT_RISK_ACKNOWLEDGED] ?: false,
+            goobyEnabled = prefs[getProfileKey(GOOBY_ENABLED, profile)] ?: false,
+            goobyStrategy = GoobyPolicy.normalizeStrategy(prefs[getProfileKey(GOOBY_STRATEGY, profile)]),
+        )
+    }.onIo()
 
     suspend fun saveProfileConnectionSettings(
         profile: Int,
@@ -1109,6 +1186,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 CONNECTION_PASSWORD, CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD_LOCAL,
                 CSQTT_LINK, CSQTT_LINK_MODE, LINK_HASHES_REMOVED, SUBSCRIPTION_URL, SUBSCRIPTION_TITLE,
                 SUBSCRIPTION_UUID, SUBSCRIPTION_NODE, SUBSCRIPTION_POWER,
+                GOOBY_ENABLED, GOOBY_STRATEGY,
             ).forEach { key -> prefs.remove(getProfileKey(key, profile)) }
             val active = prefs[ACTIVE_PROFILE] ?: CsqttConstants.Profiles.MIN_INDEX
             if (active == profile) {
@@ -1290,8 +1368,17 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
     val autoPauseOnWifi: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[AUTO_PAUSE_ON_WIFI] ?: false
     }
+    internal val wifiPreferences: Flow<WifiPreferences> = dataStore.data.map(WifiPreferenceStore::read).distinctUntilChanged()
+    internal suspend fun rememberWifiNetwork(ssid: String, expectedMode: WifiNetworkListMode? = null,
+        requireEnabled: Boolean = false): Boolean {
+        var applied = false
+        dataStore.edit { applied = WifiPreferenceStore.remember(it, ssid, expectedMode, requireEnabled) }
+        return applied
+    }
+    internal suspend fun selectWifiNetwork(ssid: String, selected: Boolean) { dataStore.edit { WifiPreferenceStore.select(it, ssid, selected) } }
+    internal suspend fun forgetWifiNetwork(ssid: String) { dataStore.edit { WifiPreferenceStore.forget(it, ssid) } }
     val wifiNetworkListMode: Flow<String> = dataStore.data.map { prefs ->
-        WifiNetworkListMode.fromStored(prefs[WIFI_NETWORK_LIST_MODE]).storedValue
+        WifiPreferenceStore.read(prefs).mode.storedValue
     }
     val wifiNetworkListSsids: Flow<String> = dataStore.data.map { prefs ->
         prefs[WIFI_NETWORK_LIST_SSIDS] ?: ""
@@ -1299,7 +1386,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
     suspend fun isBatteryOptimizationPromptHandled(): Boolean =
         dataStore.data.first()[BATTERY_OPTIMIZATION_PROMPT_HANDLED] ?: false
 
-    val themeMode: Flow<String> = dataStore.data.map { it[THEME_MODE] ?: "system" }
+    val themeMode: Flow<String> = dataStore.data.map { it[THEME_MODE] ?: "dark" }
     val isDynamicColor: Flow<Boolean> = dataStore.data.map { it[IS_DYNAMIC_COLOR] ?: false }
     val themePalette: Flow<String> = dataStore.data.map { it[THEME_PALETTE] ?: "indigo" }
 
@@ -1350,6 +1437,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 launch { vkAccessToken.collect { cachedVkAccessToken = it } }
                 launch { obfsMode.collect { cachedObfsMode = it } }
                 launch { turnTransport.collect { cachedTurnTransport = it } }
+                launch { goobyEnabled.collect { cachedGoobyEnabled = it } }
                 launch { srtpMode.collect { cachedSrtpMode = it } }
                 launch { csqttLinkMode.collect { cachedCsqttLinkMode = it } }
                 launch { workersPerHash.collect { cachedWorkersPerHash = it } }
@@ -1720,6 +1808,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             prefs.remove(getProfileKey(DEPLOY_WEB_PASSWORD, profile))
             prefs.remove(getProfileKey(DEPLOY_WEB_PASSWORD_ENCRYPTED, profile))
             prefs.remove(getProfileKey(DEPLOY_SSH_PORT, profile))
+            prefs.remove(getProfileKey(DEPLOY_MANUAL_PORTS, profile))
             if (!hasConnection) prefs.remove(getProfileKey(SERVER_PEER_PORT, profile))
             prefs.remove(getProfileKey(SERVER_WEB_PORT, profile))
             if (!hasConnection) prefs.remove(getProfileKey(MANUAL_PORTS_ENABLED, profile))
@@ -1856,6 +1945,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             val webPassword = draft.webPassword.ifBlank { readSecret(prefs, DEPLOY_WEB_PASSWORD_ENCRYPTED, DEPLOY_WEB_PASSWORD, profile).ifBlank { com.csqtt.client.ui.legacy.utils.generate16CharPassword() } }
             prefs.putSecret(DEPLOY_WEB_PASSWORD_ENCRYPTED, DEPLOY_WEB_PASSWORD, webPassword, profile)
             prefs[getProfileKey(DEPLOY_SSH_PORT, profile)] = draft.sshPort
+            prefs[getProfileKey(DEPLOY_MANUAL_PORTS, profile)] = draft.manualPortsEnabled
             prefs[getProfileKey(SERVER_PEER_PORT, profile)] = draft.serverPeerPort
             prefs[getProfileKey(SERVER_WEB_PORT, profile)] = draft.serverWebPort
             prefs[getProfileKey(MANUAL_PORTS_ENABLED, profile)] = true
@@ -1969,12 +2059,24 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         }
     }
 
+    suspend fun saveAppRoutingSelection(black: String, white: String, mode: Boolean, used: Set<String>, profile: Int, allApps: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[getProfileKey(EXCLUDED_APPS, profile)] = black
+            prefs[getProfileKey(WHITELIST_APPS, profile)] = white
+            prefs[getProfileKey(IS_WHITELIST, profile)] = mode
+            prefs[getProfileKey(APP_ROUTING_ALL, profile)] = allApps
+            prefs[getProfileKey(APP_PRESETS_USED, profile)] = used.sorted().joinToString(",")
+            prefs[SPLIT_TUNNEL_WHITELIST_MIGRATED] = true
+        }
+    }
+
     suspend fun saveAppRoutingLists(blacklist: String, whitelist: String, isWhitelist: Boolean? = null) {
         dataStore.edit { prefs ->
             val profile = prefs[ACTIVE_PROFILE] ?: 0
             prefs[getProfileKey(EXCLUDED_APPS, profile)] = blacklist
             prefs[getProfileKey(WHITELIST_APPS, profile)] = whitelist
             if (isWhitelist != null) prefs[getProfileKey(IS_WHITELIST, profile)] = isWhitelist
+            prefs[getProfileKey(APP_ROUTING_ALL, profile)] = false
             prefs[SPLIT_TUNNEL_WHITELIST_MIGRATED] = true
         }
     }
@@ -2064,6 +2166,20 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS -> CsqttConstants.Tunnel.TURN_TRANSPORT_TCP_TLS
                 else -> CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT
             }
+        }
+    }
+
+    suspend fun saveGoobyStrategy(strategy: String, forProfile: Int? = null) {
+        dataStore.edit { prefs ->
+            val profile = forProfile ?: (prefs[ACTIVE_PROFILE] ?: 0)
+            prefs[getProfileKey(GOOBY_STRATEGY, profile)] = GoobyPolicy.normalizeStrategy(strategy)
+        }
+    }
+
+    suspend fun saveGoobyEnabled(enabled: Boolean, forProfile: Int? = null) {
+        dataStore.edit { prefs ->
+            val profile = forProfile ?: (prefs[ACTIVE_PROFILE] ?: 0)
+            prefs[getProfileKey(GOOBY_ENABLED, profile)] = enabled
         }
     }
 
@@ -2226,12 +2342,19 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
 
     suspend fun saveVkAccessToken(token: String, userId: String) {
         dataStore.edit { prefs ->
+            check(!TunnelManager.running.value && !TunnelManager.starting.value && !TunnelManager.stopping.value) {
+                "Сначала остановите туннель"
+            }
             val profile = prefs[ACTIVE_PROFILE] ?: 0
+            archivePersonalVkAccounts(prefs)
+            savedVkAccounts.remember(prefs, userId, token)
             prefs.putSecret(VK_ACCOUNT_TOKEN_ENCRYPTED, VK_ACCOUNT_TOKEN, token, 0)
             prefs[VK_ACCOUNT_USER_ID] = userId
-            prefs.remove(getProfileKey(VK_ACCESS_TOKEN_ENCRYPTED, profile))
-            prefs.remove(getProfileKey(VK_ACCESS_TOKEN, profile))
-            prefs.remove(getProfileKey(VK_ACCESS_TOKEN_USER_ID, profile))
+            if (!hasImportedVkToken(prefs, profile)) {
+                prefs.remove(getProfileKey(VK_ACCESS_TOKEN_ENCRYPTED, profile))
+                prefs.remove(getProfileKey(VK_ACCESS_TOKEN, profile))
+                prefs.remove(getProfileKey(VK_ACCESS_TOKEN_USER_ID, profile))
+            }
         }
     }
 
@@ -2243,6 +2366,11 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 prefs.remove(getProfileKey(VK_ACCESS_TOKEN, profile))
                 prefs.remove(getProfileKey(VK_ACCESS_TOKEN_USER_ID, profile))
             } else {
+                val removedId = personalVkAccount(prefs).second
+                legacyPersonalVkAccounts(prefs).filterKeys { it != removedId }.forEach { (id, value) ->
+                    savedVkAccounts.rememberLegacy(prefs, id, value)
+                }
+                savedVkAccounts.forget(prefs, removedId)
                 prefs.remove(VK_ACCOUNT_TOKEN_ENCRYPTED)
                 prefs.remove(VK_ACCOUNT_TOKEN)
                 prefs.remove(VK_ACCOUNT_USER_ID)
@@ -2261,7 +2389,69 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         prefs[getProfileKey(VK_ACCESS_TOKEN_USER_ID, profile)].isNullOrBlank() &&
             readSecret(prefs, VK_ACCESS_TOKEN_ENCRYPTED, VK_ACCESS_TOKEN, profile).isNotBlank()
 
+    /** Forget one personal account only, including its old per-profile login copies. */
+    internal suspend fun removeSavedVkAccount(userId: String) {
+        dataStore.edit { prefs ->
+            check(!TunnelManager.running.value && !TunnelManager.starting.value && !TunnelManager.stopping.value) {
+                "Сначала остановите туннель"
+            }
+            val removingActive = personalVkAccount(prefs).second == userId
+            archivePersonalVkAccounts(prefs)
+            savedVkAccounts.forget(prefs, userId)
+            if (prefs[VK_ACCOUNT_USER_ID] == userId) {
+                prefs.remove(VK_ACCOUNT_TOKEN_ENCRYPTED)
+                prefs.remove(VK_ACCOUNT_TOKEN)
+                prefs.remove(VK_ACCOUNT_USER_ID)
+            }
+            for (profile in CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX) {
+                val legacyId = prefs[getProfileKey(VK_ACCESS_TOKEN_USER_ID, profile)].orEmpty()
+                // Other logins are already archived; do not silently select one via legacy fallback.
+                if (legacyId == userId || (removingActive && legacyId.isNotBlank())) {
+                    prefs.remove(getProfileKey(VK_ACCESS_TOKEN_ENCRYPTED, profile))
+                    prefs.remove(getProfileKey(VK_ACCESS_TOKEN, profile))
+                    prefs.remove(getProfileKey(VK_ACCESS_TOKEN_USER_ID, profile))
+                }
+            }
+        }
+    }
+
+    internal suspend fun selectSavedVkAccount(userId: String) {
+        dataStore.edit { prefs ->
+            check(!TunnelManager.running.value && !TunnelManager.starting.value && !TunnelManager.stopping.value) {
+                "Сначала остановите туннель"
+            }
+            val profile = prefs[ACTIVE_PROFILE] ?: 0
+            check(!hasImportedVkToken(prefs, profile)) { "Профиль использует токен из ссылки" }
+            val current = personalVkAccount(prefs)
+            if (current.second == userId && current.first.isNotBlank()) return@edit
+            val token = requireNotNull(savedVkAccounts.token(prefs, userId) ?: legacyPersonalVkAccounts(prefs)[userId]) { "Войдите в этот аккаунт снова" }
+            archivePersonalVkAccounts(prefs)
+            prefs.putSecret(VK_ACCOUNT_TOKEN_ENCRYPTED, VK_ACCOUNT_TOKEN, token, 0)
+            prefs[VK_ACCOUNT_USER_ID] = userId
+        }
+    }
+
     // Legacy personal logins are reused across slots; tokens from links have no account UID.
+    private fun archivePersonalVkAccounts(prefs: MutablePreferences) {
+        legacyPersonalVkAccounts(prefs).forEach { (id, value) -> savedVkAccounts.rememberLegacy(prefs, id, value) }
+        // Only the explicit shared login is authoritative over an existing archive entry.
+        val shared = readSecret(prefs, VK_ACCOUNT_TOKEN_ENCRYPTED, VK_ACCOUNT_TOKEN, 0)
+        savedVkAccounts.remember(prefs, prefs[VK_ACCOUNT_USER_ID].orEmpty(), shared)
+    }
+
+    private fun legacyPersonalVkAccounts(prefs: Preferences): Map<String, String> = buildMap {
+        for (p in CsqttConstants.Profiles.MIN_INDEX..CsqttConstants.Profiles.MAX_INDEX) {
+            val uid = prefs[getProfileKey(VK_ACCESS_TOKEN_USER_ID, p)].orEmpty()
+            if (uid.isNotBlank()) {
+                val token = readSecret(prefs, VK_ACCESS_TOKEN_ENCRYPTED, VK_ACCESS_TOKEN, p)
+                if (token.isNotBlank()) put(uid, token)
+            }
+        }
+        val token = readSecret(prefs, VK_ACCOUNT_TOKEN_ENCRYPTED, VK_ACCOUNT_TOKEN, 0)
+        val uid = prefs[VK_ACCOUNT_USER_ID].orEmpty()
+        if (uid.isNotBlank() && token.isNotBlank()) put(uid, token)
+    }
+
     private fun personalVkAccount(prefs: Preferences): Pair<String, String> {
         val shared = readSecret(prefs, VK_ACCOUNT_TOKEN_ENCRYPTED, VK_ACCOUNT_TOKEN, 0)
         if (shared.isNotBlank()) return shared to (prefs[VK_ACCOUNT_USER_ID] ?: "")
@@ -2283,6 +2473,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
         dataStore.edit { prefs ->
             val profile = prefs[ACTIVE_PROFILE] ?: 0
             prefs[getProfileKey(IS_WHITELIST, profile)] = enabled
+            prefs[getProfileKey(APP_ROUTING_ALL, profile)] = false
             prefs[SPLIT_TUNNEL_WHITELIST_MIGRATED] = true
         }
     }
@@ -2296,6 +2487,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 prefs[getProfileKey(EXCLUDED_APPS, profile)] = packages
             }
             prefs[getProfileKey(IS_WHITELIST, profile)] = isWhitelist
+            prefs[getProfileKey(APP_ROUTING_ALL, profile)] = false
             prefs[SPLIT_TUNNEL_WHITELIST_MIGRATED] = true
         }
     }
@@ -2628,6 +2820,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             tunnel.put("connection_password", readConnectionPasswordState(prefs, p).value)
             tunnel.put("obfs_mode", prefs[getProfileKey(OBFS_MODE, p)] ?: CsqttConstants.Tunnel.DEFAULT_OBFS_MODE)
             tunnel.put("turn_transport", prefs[getProfileKey(TURN_TRANSPORT, p)] ?: CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT)
+            tunnel.put("gooby_strategy", GoobyPolicy.normalizeStrategy(prefs[getProfileKey(GOOBY_STRATEGY, p)]))
+            tunnel.put("gooby_enabled", prefs[getProfileKey(GOOBY_ENABLED, p)] ?: false)
             tunnel.put("srtp_mode", prefs[getProfileKey(SRTP_MODE, p)] ?: CsqttConstants.SrtpMode.DEFAULT)
             tunnel.put("custom_turn_ips", prefs[getProfileKey(CUSTOM_TURN_IPS, p)] ?: "")
             tunnel.put("sni", prefs[getProfileKey(SNI, p)] ?: "")
@@ -2640,6 +2834,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
             deploy.put("deploy_ip", prefs[getProfileKey(DEPLOY_IP, p)] ?: "")
             deploy.put("deploy_login", prefs[getProfileKey(DEPLOY_LOGIN, p)] ?: "")
             deploy.put("deploy_ssh_port", prefs[getProfileKey(DEPLOY_SSH_PORT, p)] ?: "")
+            deploy.put("manual_ports", prefs[getProfileKey(DEPLOY_MANUAL_PORTS, p)] ?: prefs[getProfileKey(MANUAL_PORTS_ENABLED, p)] ?: false)
             deploy.put("server_web_port", prefs[getProfileKey(SERVER_WEB_PORT, p)] ?: CsqttConstants.Network.DEFAULT_SERVER_WEB_PORT)
             deploy.put("docker_install", prefs[getProfileKey(DOCKER_INSTALL, p)] ?: true)
             deploy.put("ssh_keys_mode", prefs[getProfileKey(SSH_KEYS_MODE, p)] ?: false)
@@ -2660,6 +2855,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
 
         if (includeExceptions) {
             val exc = JSONObject()
+            prefs[getProfileKey(APP_ROUTING_ALL, p)]?.let { exc.put("all_apps", it) }
+            exc.put("app_presets_used", prefs[getProfileKey(APP_PRESETS_USED, p)] ?: "")
             exc.put("excluded_apps", prefs[getProfileKey(EXCLUDED_APPS, p)] ?: "")
             exc.put("whitelist_apps", prefs[getProfileKey(WHITELIST_APPS, p)] ?: "")
             exc.put("is_whitelist", prefs[getProfileKey(IS_WHITELIST, p)] ?: false)
@@ -2678,21 +2875,23 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
 
         if (includeSettings) {
             val settings = JSONObject()
-            settings.put("theme_mode", prefs[THEME_MODE] ?: "system")
-            settings.put("ui_design", prefs[UI_DESIGN] ?: "v2")
+            settings.put("theme_mode", prefs[THEME_MODE] ?: "dark")
+            settings.put("ui_design", UiDesignPresets.normalize(prefs[UI_DESIGN]))
+            settings.put("ui_scale_percent", UiScale.normalize(prefs[UI_SCALE]))
             settings.put("battery_saver_mode", prefs[BATTERY_SAVER_MODE] ?: BatterySaver.DEFAULT_MODE)
             settings.put("battery_saver_percent", prefs[BATTERY_SAVER_PERCENT] ?: BatterySaver.DEFAULT_PERCENT)
             settings.put("is_dynamic_color", prefs[IS_DYNAMIC_COLOR] ?: false)
             settings.put("theme_palette", prefs[THEME_PALETTE] ?: "pure_black")
             settings.put("auto_pause_on_wifi", prefs[AUTO_PAUSE_ON_WIFI] ?: false)
-            settings.put("wifi_network_list_mode", WifiNetworkListMode.fromStored(prefs[WIFI_NETWORK_LIST_MODE]).storedValue)
+            settings.put("wifi_network_list_mode", WifiPreferenceStore.read(prefs).mode.storedValue)
             settings.put("wifi_network_list_ssids", prefs[WIFI_NETWORK_LIST_SSIDS] ?: "")
+            settings.put("wifi_saved_ssids", encodeWifiSsids(WifiPreferenceStore.read(prefs).saved))
             settings.put("selected_fingerprint", prefs[getProfileKey(SELECTED_FINGERPRINT, p)] ?: "chrome")
             settings.put("selected_turn_subnet", prefs[getProfileKey(SELECTED_TURN_SUBNET, p)] ?: "")
             settings.put("turn_subnet_ip_limit", prefs[getProfileKey(TURN_SUBNET_IP_LIMIT, p)] ?: "ALL")
-            settings.put("logging_enabled", prefs[LOGGING_ENABLED] ?: true)
+            settings.put("logging_enabled", true)
             settings.put("detailed_logs", prefs[DETAILED_LOGS] ?: false)
-            settings.put("participant_show_logs", prefs[getProfileKey(PARTICIPANT_SHOW_LOGS, p)] ?: false)
+            settings.put("participant_show_logs", prefs[getProfileKey(PARTICIPANT_SHOW_LOGS, p)] ?: (prefs[UI_OWNER_MODE] ?: false))
             root.put("settings", settings)
         }
 
@@ -2728,6 +2927,8 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                     }
                     if (tunnel.has("obfs_mode")) mutable[getProfileKey(OBFS_MODE, p)] = tunnel.getString("obfs_mode")
                     if (tunnel.has("turn_transport")) mutable[getProfileKey(TURN_TRANSPORT, p)] = tunnel.getString("turn_transport")
+                    mutable[getProfileKey(GOOBY_STRATEGY, p)] = GoobyPolicy.normalizeStrategy(tunnel.optString("gooby_strategy", "current"))
+                    mutable[getProfileKey(GOOBY_ENABLED, p)] = tunnel.optBoolean("gooby_enabled", false)
                     if (tunnel.has("srtp_mode")) mutable[getProfileKey(SRTP_MODE, p)] = tunnel.getString("srtp_mode")
                     if (tunnel.has("custom_turn_ips")) mutable[getProfileKey(CUSTOM_TURN_IPS, p)] = tunnel.getString("custom_turn_ips")
                     if (tunnel.has("sni")) mutable[getProfileKey(SNI, p)] = tunnel.getString("sni")
@@ -2738,6 +2939,7 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                     if (deploy.has("deploy_ip")) mutable[getProfileKey(DEPLOY_IP, p)] = deploy.getString("deploy_ip")
                     if (deploy.has("deploy_login")) mutable[getProfileKey(DEPLOY_LOGIN, p)] = deploy.getString("deploy_login")
                     if (deploy.has("deploy_ssh_port")) mutable[getProfileKey(DEPLOY_SSH_PORT, p)] = deploy.getString("deploy_ssh_port")
+                    if (deploy.has("manual_ports")) mutable[getProfileKey(DEPLOY_MANUAL_PORTS, p)] = deploy.getBoolean("manual_ports")
                     if (deploy.has("server_web_port")) mutable[getProfileKey(SERVER_WEB_PORT, p)] = deploy.getInt("server_web_port")
                     if (deploy.has("docker_install")) mutable[getProfileKey(DOCKER_INSTALL, p)] = deploy.getBoolean("docker_install")
                     if (deploy.has("ssh_keys_mode")) mutable[getProfileKey(SSH_KEYS_MODE, p)] = deploy.getBoolean("ssh_keys_mode")
@@ -2758,6 +2960,9 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 }
                 if (includeExceptions && root.has("exceptions")) {
                     val exc = root.getJSONObject("exceptions")
+                    if (exc.has("all_apps")) mutable[getProfileKey(APP_ROUTING_ALL, p)] = exc.getBoolean("all_apps")
+                    else mutable.remove(getProfileKey(APP_ROUTING_ALL, p))
+                    mutable[getProfileKey(APP_PRESETS_USED, p)] = exc.optString("app_presets_used", "black,white")
                     if (exc.has("excluded_apps")) mutable[getProfileKey(EXCLUDED_APPS, p)] = exc.getString("excluded_apps")
                     if (exc.has("whitelist_apps")) mutable[getProfileKey(WHITELIST_APPS, p)] = exc.getString("whitelist_apps")
                     if (exc.has("is_whitelist")) mutable[getProfileKey(IS_WHITELIST, p)] = exc.getBoolean("is_whitelist")
@@ -2775,12 +2980,14 @@ private val DEPLOY_LAST_INSPECTION_PANEL = booleanPreferencesKey("deploy_last_in
                 if (includeSettings && root.has("settings")) {
                     val s = root.getJSONObject("settings")
                     if (s.has("theme_mode")) mutable[THEME_MODE] = s.getString("theme_mode")
-                    s.optString("ui_design").takeIf { it in listOf("classic", "v2") }?.let { mutable[UI_DESIGN] = it }
+                    s.optString("ui_design").takeIf { value -> UiDesignPresets.options.any { it.first == value } }?.let { mutable[UI_DESIGN] = it }
+                    if (s.has("ui_scale_percent")) mutable[UI_SCALE] = UiScale.normalize(s.optInt("ui_scale_percent", 100))
                     s.optString("battery_saver_mode").takeIf { mode -> BatterySaver.MODES.any { it.first == mode } }?.let { mutable[BATTERY_SAVER_MODE] = it }
                     if (s.has("battery_saver_percent")) mutable[BATTERY_SAVER_PERCENT] = s.getInt("battery_saver_percent").coerceIn(5, 95)
                     if (s.has("is_dynamic_color")) mutable[IS_DYNAMIC_COLOR] = s.getBoolean("is_dynamic_color")
                     if (s.has("theme_palette")) mutable[THEME_PALETTE] = s.getString("theme_palette")
                     if (s.has("auto_pause_on_wifi")) mutable[AUTO_PAUSE_ON_WIFI] = s.getBoolean("auto_pause_on_wifi")
+                    if (s.has("wifi_saved_ssids")) mutable[WifiPreferenceStore.savedKey] = encodeWifiSsids(decodeWifiSsids(s.getString("wifi_saved_ssids")))
                     if (s.has("wifi_network_list_mode")) mutable[WIFI_NETWORK_LIST_MODE] = WifiNetworkListMode.fromStored(s.getString("wifi_network_list_mode")).storedValue
                     if (s.has("wifi_network_list_ssids")) mutable[WIFI_NETWORK_LIST_SSIDS] = encodeWifiSsids(decodeWifiSsids(s.getString("wifi_network_list_ssids")))
                     if (s.has("selected_fingerprint")) mutable[getProfileKey(SELECTED_FINGERPRINT, p)] = s.getString("selected_fingerprint")

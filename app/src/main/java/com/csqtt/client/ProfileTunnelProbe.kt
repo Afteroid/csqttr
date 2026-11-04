@@ -76,6 +76,7 @@ internal object ProfileTunnelProbe {
                 val result = VkApi.startCall(token)
                 if (result !is VkApiResult.Ok) return@coroutineScope ProfilePingResult.Failure("Ошибка авторизации VK API")
                 createdCall = result.value
+                ensureActive()
                 hashes = result.value.hash
             }
             if (jsMode && token.isBlank()) return@coroutineScope ProfilePingResult.Failure("Войдите в VK")
@@ -92,9 +93,11 @@ internal object ProfileTunnelProbe {
                 "-client-ids", store.activeClientIds.first(), "-gen", (System.currentTimeMillis() / 1000).toString(),
                 "-salt", newTunnelSessionId())
             if (firstHash.isNotBlank()) command.addAll(listOf("-vk", firstHash))
+            command.addAll(GoobyPolicy.arguments(store.goobyEnabled.first(), store.turnTransport.first(), store.goobyStrategy.first()))
             store.customTurnIps.first().takeIf { it.isNotBlank() }?.let { command.addAll(listOf("-custom-turn-ips", it)) }
             val started = ProcessBuilder(command).directory(context.filesDir).redirectErrorStream(true).apply {
                 environment()["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir
+                environment()["TMPDIR"] = context.cacheDir.absolutePath
                 environment()["CSQTT_EVENTS"] = "1"
                 environment()["CSQTT_PASSWORD"] = source.password
                 environment()["RAYON_NUM_THREADS"] = "2"
@@ -108,8 +111,8 @@ internal object ProfileTunnelProbe {
             val config = CompletableDeferred<String>()
             reader = launch(Dispatchers.IO) {
                 try {
-                    started.inputStream.bufferedReader().useLines { lines ->
-                        for (line in lines) when (val event = TunnelEventParser.parse(line)) {
+                    readProbeOutput(started.inputStream, { started.isAlive }) { line ->
+                        when (val event = TunnelEventParser.parse(line)) {
                             is TunnelEventParser.Event.Config -> if (event.config.startsWith("TUNCONF:")) config.complete(event.config)
                             is TunnelEventParser.Event.CaptchaRequest -> config.completeExceptionally(ProbeError("Требуется капча: сначала подключитесь вручную"))
                             is TunnelEventParser.Event.Error -> if (event.fatal) config.completeExceptionally(ProbeError("Сервер или VK отклонил подключение"))
@@ -150,13 +153,14 @@ internal object ProfileTunnelProbe {
             ProfilePingResult.Failure(e.message.orEmpty())
         } finally {
             withContext(NonCancellable + Dispatchers.IO) {
+                transport?.close()
                 process?.let { p ->
+                    // Let the diagnostic core finish its own VK calls before forcing shutdown.
                     runCatching { p.outputStream.write("FINISH_VK_CALLS\nSTOP\n".toByteArray()); p.outputStream.flush() }
                     if (!p.waitFor(2, TimeUnit.SECONDS)) p.destroyForcibly()
-                    runCatching { p.inputStream.close() }
                 }
                 reader?.cancelAndJoin()
-                transport?.close()
+                runCatching { process?.inputStream?.close() }
                 createdCall?.let { VkApi.forceFinishCall(token, it.callId) }
             }
         }

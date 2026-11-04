@@ -150,7 +150,7 @@ private fun V2CryptoItem(
                     text = badge,
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontFamily = V2BodyFamily,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 11.sp,
                     ),
                     color = colors.accent,
@@ -161,7 +161,7 @@ private fun V2CryptoItem(
                     text = title,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontFamily = V2BodyFamily,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.Normal,
                     ),
                     color = colors.textPrimary,
                 )

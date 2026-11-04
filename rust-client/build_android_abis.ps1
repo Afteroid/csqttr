@@ -34,7 +34,7 @@ foreach ($build in $builds) {
         Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
     }
 
-    $cmdArgs = "/d /c (`"$cargo`" ndk -t $($build.Abi) -P 26 build --release --jobs $jobsPerAbi --target-dir `"$($build.TargetDir)`") > `"$logFile`" 2>&1"
+    $cmdArgs = "/d /c (`"$cargo`" ndk -t $($build.Abi) -P 26 --link-builtins build --release --jobs $jobsPerAbi --target-dir `"$($build.TargetDir)`") > `"$logFile`" 2>&1"
 
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = "cmd.exe"

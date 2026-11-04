@@ -1,5 +1,6 @@
 package com.csqtt.client.ui.v2.components
 
+import com.csqtt.client.ui.v2.design.V2TextSizes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -20,7 +21,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -55,39 +58,38 @@ fun V2PillButton(
     loading: Boolean = false,
     height: Dp = 54.dp,
     horizontalPadding: Dp = 10.dp,
-    fontSize: androidx.compose.ui.unit.TextUnit = 14.sp,
+    fontSize: androidx.compose.ui.unit.TextUnit = V2TextSizes.Action,
+    shape: androidx.compose.ui.graphics.Shape = V2Shapes.Button,
+    contentColorOverride: Color? = null,
+    maxLines: Int = 1,
 ) {
     val colors = V2Theme.colors
     val background = when (style) {
         V2PillStyle.Contrast -> if (enabled) colors.contrast else colors.field
         V2PillStyle.Outline -> if (enabled) colors.surfaceElevated else colors.field
         V2PillStyle.Accent -> if (enabled) colors.accent else colors.accentSoft
-        V2PillStyle.Danger -> if (enabled) colors.error else colors.error.copy(alpha = 0.4f)
+        V2PillStyle.Danger -> if (enabled) colors.danger else colors.danger.copy(alpha = 0.55f).compositeOver(colors.field)
     }
     val contentColor = when (style) {
         V2PillStyle.Contrast -> if (enabled) colors.onContrast else colors.textMuted
         V2PillStyle.Outline -> if (enabled) colors.textPrimary else colors.textMuted
         V2PillStyle.Accent -> if (enabled) colors.onAccent else colors.textMuted
-        V2PillStyle.Danger -> if (enabled) Color.White else Color.White.copy(alpha = 0.5f)
+        V2PillStyle.Danger -> if (enabled) colors.onDanger else colors.onDanger.copy(alpha = 0.75f)
     }
 
     Surface(
         modifier = modifier
             .height(height)
-            .then(
-                if (enabled) {
-                    Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onClick,
-                    )
-                } else {
-                    Modifier
-                },
+            .clickable(
+                enabled = enabled,
+                role = Role.Button,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
             ),
-        shape = V2Shapes.Button, // 14.dp: bigger, squarer
+        shape = shape,
         color = background,
-        contentColor = contentColor,
+        contentColor = if (enabled) contentColorOverride ?: contentColor else contentColor,
         border = null,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
@@ -122,10 +124,11 @@ fun V2PillButton(
                 text = text,
                 style = MaterialTheme.typography.labelLarge.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Medium,
                     fontSize = fontSize,
                 ),
-                maxLines = 1,
+                maxLines = maxLines,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 overflow = TextOverflow.Ellipsis,
             )
         }

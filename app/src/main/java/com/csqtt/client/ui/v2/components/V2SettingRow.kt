@@ -1,5 +1,6 @@
 package com.csqtt.client.ui.v2.components
 
+import com.csqtt.client.ui.v2.design.V2TextSizes
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -75,7 +76,7 @@ fun V2SettingRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 40.dp),
+                .heightIn(min = LocalV2AdaptiveMetrics.current.rowHeight),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -84,8 +85,8 @@ fun V2SettingRow(
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Normal,
+                    fontSize = V2TextSizes.Body,
                 ),
                 color = if (enabled) colors.textPrimary else colors.textMuted,
             )
@@ -116,18 +117,20 @@ fun V2Switch(
     val trackColor by animateColorAsState(
         animationSpec = if (userToggle) androidx.compose.animation.core.tween(180) else androidx.compose.animation.core.snap(),
         targetValue = when {
-            !enabled -> colors.field
+            !enabled && checked -> colors.accent.copy(alpha = 0.65f)
+            !enabled -> if(light) Color(0xFFE0E3E8) else colors.textSecondary.copy(alpha = 0.28f)
             checked -> colors.accent
-            else -> if(light) Color(0xFFD9E8FB) else colors.textSecondary.copy(alpha = 0.28f)
+            else -> if(light) Color(0xFFE0E3E8) else colors.textSecondary.copy(alpha = 0.28f)
         },
         label = "v2-switch-track",
     )
     val thumbColor by animateColorAsState(
         animationSpec = if (userToggle) androidx.compose.animation.core.tween(180) else androidx.compose.animation.core.snap(),
         targetValue = when {
+            !enabled && checked -> Color.White.copy(alpha = 0.85f)
             !enabled -> colors.textMuted
             checked -> Color.White
-            else -> if(light) Color(0xFF709CD1) else colors.textSecondary
+            else -> if(light) Color(0xFF626B78) else colors.textSecondary
         },
         label = "v2-switch-thumb-color",
     )
@@ -138,7 +141,7 @@ fun V2Switch(
             .height(28.dp)
             .clip(V2Shapes.Pill)
             .background(trackColor)
-            .border(1.dp, if(checked || light) colors.accent.copy(alpha = 0.65f) else colors.textSecondary.copy(alpha = 0.6f), V2Shapes.Pill)
+            .border(1.dp, if(checked) colors.accent else colors.textSecondary.copy(alpha = 0.6f), V2Shapes.Pill)
             .toggleable(
                 value = checked,
                 role = Role.Switch,
@@ -231,8 +234,8 @@ fun V2DropdownPill(
                     text = value,
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontFamily = V2BodyFamily,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = V2TextSizes.Body,
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -256,7 +259,7 @@ fun V2DropdownPill(
                             option,
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontFamily = V2BodyFamily,
-                                fontWeight = FontWeight.SemiBold,
+                                fontWeight = FontWeight.Normal,
                             ),
                         )
                     },
@@ -349,8 +352,8 @@ fun V2ActionSetting(
                 text = action,
                 style = MaterialTheme.typography.labelMedium.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Normal,
+                    fontSize = V2TextSizes.Body,
                 ),
                 color = if (accent) colors.contrast else colors.textSecondary,
             )

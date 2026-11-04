@@ -147,7 +147,7 @@ object CsqttConstants {
                 "&response_type=token" +
                 "&revoke=1" +
                 "&v=5.199"
-        const val VK_LOGIN_URL = "https://vk.ru/"
+        const val VK_LOGIN_URL = "https://m.vk.ru/login"
         const val API_METHOD_BASE_URL = "https://api.vk.ru/method/"
         const val API_VERSION = "5.199"
 

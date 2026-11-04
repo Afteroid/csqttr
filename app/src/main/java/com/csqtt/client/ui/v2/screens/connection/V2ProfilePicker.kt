@@ -115,8 +115,10 @@ internal fun V2ProfilePickerMenu(
             )
             return
         }
-        scope.launch { settingsStore.saveActiveProfile(profile) }
-        onDismiss()
+        scope.launch {
+            settingsStore.saveActiveProfile(profile)
+            onDismiss()
+        }
     }
 
     fun refreshSubscription(url: String) {
@@ -352,7 +354,7 @@ private fun V2SubscriptionCard(
                         text = title,
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontFamily = V2BodyFamily,
-                            fontWeight = FontWeight.ExtraBold,
+                            fontWeight = FontWeight.Normal,
                         ),
                         color = colors.textPrimary,
                         maxLines = 1,
@@ -525,7 +527,7 @@ private fun V2ProfilePickerRow(
             text = name,
             style = MaterialTheme.typography.titleSmall.copy(
                 fontFamily = V2BodyFamily,
-                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                fontWeight = FontWeight.Normal,
             ),
             color = if (selected) colors.textPrimary else colors.textSecondary,
             maxLines = 1,

@@ -8,6 +8,8 @@ import com.csqtt.client.ui.v2.navigation.CsqttV2Root
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.graphics.toArgb
 import android.graphics.Bitmap
 import java.io.File
 import com.csqtt.client.ui.legacy.utils.formatCsqttLink
@@ -60,6 +62,17 @@ class HappInterfaceTest {
         runBlocking { store.clearProfile(28); store.saveProfileName(0, ""); store.saveThemeMode("dark") }
     }
 
+    @Test fun removedDesignMigratesToOriginalPalette() {
+        runBlocking { store.saveThemeMode("dark"); store.saveUiDesign(UiDesignPresets.NEW) }
+        compose.waitUntil(5000) { runBlocking { store.uiDesign.first() == UiDesignPresets.ORIGINAL_250 } }
+        compose.onNodeWithContentDescription("Настройки").performClick()
+        compose.onNodeWithText("Новый · 2.5.0").performScrollTo().performClick()
+        compose.onNodeWithText("Новый", substring = false).assertDoesNotExist()
+        compose.onNodeWithText("Классический").assertIsDisplayed()
+        screenshot("review21-design-presets.png")
+        runBlocking { check(store.readProfileConnectionSettings(0).peer == "203.0.113.10") }
+    }
+
     @Test fun profileAndTurnPingResultsSurviveNavigationAndReopeningDialogs() {
         PingResultsCache.saveProfile(0, ProfilePingResult.Success(37))
         PingResultsCache.saveTurn(TurnSubnetRegistry.subnets.first().id, 51)
@@ -76,6 +89,43 @@ class HappInterfaceTest {
         PingResultsCache.clearTurn()
     }
 
+    @Test fun tunnelReopensWithCurrentDraftAndPasswordHidden() {
+        runBlocking {
+            store.saveProfileConnectionSettings(23, "203.0.113.23", 5052, "FixturePassword23", 30)
+            store.saveProfileName(23, "Tunnel fixture 23")
+            store.saveVkAuthMode("legacy", forProfile = 23)
+            store.saveActiveProfile(23)
+        }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithText("Туннель").performClick()
+            compose.mainClock.advanceTimeByFrame()
+            compose.onNodeWithText("Tunnel fixture 23").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Адрес сервера").assertTextEquals("203.0.113.23")
+            compose.onNodeWithContentDescription("Порт PEER").assertTextEquals("5052")
+            compose.onNodeWithText("Настройки капчи").assertExists()
+            compose.onNodeWithContentDescription("Показать пароль туннеля").performClick()
+            compose.mainClock.advanceTimeByFrame()
+            compose.onNodeWithContentDescription("Скрыть пароль туннеля").assertExists()
+            compose.onNodeWithContentDescription("Адрес сервера").performTextReplacement("203.0.113.233")
+            compose.mainClock.advanceTimeByFrame()
+            compose.onNodeWithText("Подкл.").performClick()
+            compose.mainClock.advanceTimeByFrame()
+            compose.onNodeWithText("Туннель").performClick()
+            compose.mainClock.advanceTimeByFrame()
+            compose.onNodeWithText("Tunnel fixture 23").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Адрес сервера").assertTextEquals("203.0.113.233")
+            compose.onNodeWithContentDescription("Показать пароль туннеля").assertExists()
+            compose.onNodeWithContentDescription("Скрыть пароль туннеля").assertDoesNotExist()
+        } finally { compose.mainClock.autoAdvance = true }
+        screenshot("review11-tunnel-restored.png")
+        runBlocking {
+            store.saveActiveProfile(0)
+            store.clearProfile(23)
+        }
+    }
+
     @Test fun participantCanOpenTunnelAndHelpWithoutDeployTab() {
         compose.onNodeWithText("Деплой").assertDoesNotExist()
         compose.onNodeWithText("Туннель").performClick()
@@ -84,6 +134,54 @@ class HappInterfaceTest {
         compose.onNodeWithContentDescription("Подсказка: Режим SRTP").performClick()
         compose.onNodeWithText("Понятно").assertIsDisplayed().performClick()
         screenshot("happ-tunnel.png")
+    }
+
+    @Test fun adaptiveTabsKeepActionsNearFieldsAndUseTunnelHeight() {
+        runBlocking {
+            store.saveUiOwnerMode(true)
+            store.saveVkAuthMode("vkcalls", forProfile = 0)
+            store.saveVkHashMode("manual", forProfile = 0)
+        }
+        for (theme in listOf("dark", "light")) {
+            runBlocking { store.saveThemeMode(theme) }
+            compose.onNodeWithText("Туннель").performClick()
+            compose.onNodeWithText("TURN подсети").assertIsDisplayed()
+            val settings = compose.onNodeWithTag("tunnel-settings").getUnclippedBoundsInRoot()
+            val lastRow = compose.onNodeWithText("TURN подсети").getUnclippedBoundsInRoot()
+            check(settings.bottom - lastRow.bottom < androidx.compose.ui.unit.Dp(80f)) {
+                "Tunnel leaves too much unused height: ${settings.bottom - lastRow.bottom}"
+            }
+            screenshot("review9-tunnel-$theme.png")
+            compose.onNodeWithText("Деплой").performClick()
+            compose.onNodeWithText("Установить").performScrollTo().assertIsDisplayed()
+            val field = compose.onNodeWithContentDescription("Пароль веб-панели").getUnclippedBoundsInRoot()
+            val action = compose.onNodeWithText("Установить").getUnclippedBoundsInRoot()
+            check(action.top - field.bottom < androidx.compose.ui.unit.Dp(64f)) {
+                "Deploy actions are separated from the form: ${action.top - field.bottom}"
+            }
+            val viewport = compose.onRoot().getUnclippedBoundsInRoot()
+            if (viewport.bottom - viewport.top >= androidx.compose.ui.unit.Dp(760f)) {
+                compose.onNodeWithContentDescription("Добавить VPS").performScrollTo()
+                compose.onNodeWithText("Удалить с сервера").assertIsDisplayed()
+            } else {
+                compose.onNodeWithText("Удалить с сервера").performScrollTo().assertIsDisplayed()
+            }
+            screenshot("review9-deploy-$theme.png")
+            compose.onNodeWithText("Маршрут").performClick()
+            compose.onNodeWithText("Импорт и экспорт правил").performScrollTo().assertIsDisplayed()
+            screenshot("review9-routing-$theme.png")
+            compose.onNodeWithText("Логи").performClick()
+            compose.onNodeWithText("Все уровни ▾").assertIsDisplayed()
+            screenshot("review9-logs-$theme.png")
+            compose.onNodeWithText("Подкл.").performClick()
+            compose.onNodeWithText("Серверы").assertIsDisplayed()
+            screenshot("review9-connection-$theme.png")
+            compose.onNodeWithContentDescription("Настройки").performClick()
+            compose.onNodeWithText("Режим приложения").assertIsDisplayed()
+            screenshot("review9-settings-$theme.png")
+            compose.onNodeWithText(BatterySaver.LEVEL_TITLE).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithContentDescription("Назад").performClick()
+        }
     }
 
     @Test fun participantCanHideLogsWithoutDisablingRecordingAndOwnerKeepsLogs() {

@@ -1,19 +1,19 @@
 package com.csqtt.client
 
 object TunnelLogPolicy {
+    private val stunRecoveryCode = Regex("(?i)\\bSTUN(?:\\s+error)?[\\s:=]+(?:437|486)\\b")
     fun isAllowedWhenInactiveLogging(key: String, isError: Boolean, level: LogLevel?): Boolean {
         return isError || level == LogLevel.ERR || key == "ready" || key == "stats"
     }
 
     fun isInternalRecovery(line: String): Boolean {
-        if (line.contains("FATAL_", ignoreCase = true)) return false
+        if (line.contains("FATAL_", ignoreCase = true) || line.contains("[TURN][DOWN]", ignoreCase = true)) return false
         return line.contains("GETCONF", ignoreCase = true) ||
             line.contains("[СЕТЬ][RETRY]", ignoreCase = true) ||
             line.contains("[TURN][RETRY]", ignoreCase = true) ||
             line.contains("[HANDSHAKE][RETRY]", ignoreCase = true) ||
             line.contains("PEER_LIVENESS_TIMEOUT", ignoreCase = true) ||
-            line.contains("486", ignoreCase = true) ||
-            line.contains("437", ignoreCase = true) ||
+            stunRecoveryCode.containsMatchIn(line) ||
             (line.contains("turn", ignoreCase = true) && line.contains("timeout", ignoreCase = true)) ||
             (line.contains("allocation", ignoreCase = true) && line.contains("quota", ignoreCase = true)) ||
             (line.contains("allocation", ignoreCase = true) && line.contains("mismatch", ignoreCase = true)) ||

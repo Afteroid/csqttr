@@ -27,6 +27,9 @@ pub struct Stats {
 
 impl Stats {
     pub async fn run(self: Arc<Self>, events: Events, cancel: CancellationToken) {
+        crate::traffic_diagnostics::init_from_env();
+        let mut traffic = crate::traffic_diagnostics::Reporter::default();
+        let mut traffic_at = std::time::Instant::now();
         let mut interval = tokio::time::interval(TICK);
         interval.tick().await;
         let mut log_counter = 0u32;
@@ -42,6 +45,11 @@ impl Stats {
                     log_counter += 1;
                     ticks_since_emit += 1;
                     let now = (active, up, down);
+                    let elapsed = traffic_at.elapsed();
+                    if elapsed >= crate::traffic_diagnostics::PERIOD {
+                        traffic.emit(elapsed, up, down, active);
+                        traffic_at = std::time::Instant::now();
+                    }
                     if should_emit(last_emitted, now, ticks_since_emit) {
                         events.stats(active, up, down);
                         last_emitted = Some(now);
