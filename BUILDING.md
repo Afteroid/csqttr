@@ -7,7 +7,7 @@ Gooby включён в `rust-client/vendor/gooby`: отдельный проц�
 
 ## Linux / WSL
 
-Нужны JDK 21, Android SDK Platform 37, Build Tools 36.0.0, Linux NDK r28c,
+Нужны JDK 21, Android SDK Platform 37 (пакет `platforms;android-37.0`), Build Tools 36.0.0, Linux NDK r28c,
 Rust 1.97.1 или новее, cargo-ndk, CMake, Clang, pkg-config и компилятор C/C++.
 Для 32-битного LuaJIT при сборке armeabi-v7a на Ubuntu x86_64 нужен gcc-multilib.
 В WSL используйте Linux NDK, а не Windows NDK.
