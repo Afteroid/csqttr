@@ -31,7 +31,7 @@ class DesignCompatibilityTest {
             }
             compose.waitUntil(5000) { compose.onAllNodesWithContentDescription("Настройки").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithContentDescription("Настройки").performClick()
-            compose.onNodeWithText("Новый").performScrollTo().performClick()
+            compose.onNodeWithText("Новый · 2.5.0").performScrollTo().performClick()
             compose.onNodeWithText("Классический").performClick()
             compose.waitUntil(5000) { compose.onAllNodesWithContentDescription("Быстрые настройки").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithContentDescription("Быстрые настройки").performClick()
@@ -41,8 +41,8 @@ class DesignCompatibilityTest {
             compose.onNodeWithText("Показывать логи").performScrollTo().performClick()
             compose.waitUntil(5000) { runBlocking { store.participantShowLogs.first() } }
             compose.onNodeWithText("Классический").performScrollTo().performClick()
-            compose.onNodeWithText("Новый").performClick()
-            compose.waitUntil(5000) { runBlocking { store.uiDesign.first() == "v2" } }
+            compose.onNodeWithText("Новый · 2.5.0").performClick()
+            compose.waitUntil(5000) { runBlocking { store.uiDesign.first() == UiDesignPresets.ORIGINAL_250 } }
             compose.onNodeWithText(BatterySaver.TITLE).performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("≤ 20 %").assertExists()
             compose.onNodeWithText("Показывать вкладку «Логи»").performScrollTo().assertExists()

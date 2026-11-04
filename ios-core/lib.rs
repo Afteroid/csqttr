@@ -37,6 +37,8 @@ mod dispatcher;
 mod dns;
 #[path = "../rust-client/events.rs"]
 mod events;
+#[path = "../rust-client/gooby.rs"]
+mod gooby;
 #[path = "../rust-client/logging.rs"]
 mod logging;
 #[path = "../rust-client/namegen.rs"]
@@ -421,6 +423,7 @@ async fn run_client(config: CsqttConfig) -> Result<(), anyhow::Error> {
         turn_port: (!config.port.is_empty()).then(|| std::sync::Arc::from(config.port.as_str())),
         turn_ip_pool,
         turn_transport,
+        gooby_proxy: None,
         srtp_mode,
         hashes: hashes.into(),
         wrap_key,

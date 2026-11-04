@@ -18,7 +18,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LifecycleStartEffect
 import com.csqtt.client.ui.v2.design.V2Shapes
 import com.csqtt.client.ui.v2.design.V2Theme
 import com.csqtt.client.ui.v2.monitor.ResourceMonitor
@@ -42,11 +42,9 @@ fun V2ResourceHud(
     val snapshot by ResourceMonitor.snapshot.collectAsStateWithLifecycle()
     val session by ResourceMonitor.session.collectAsStateWithLifecycle()
 
-    DisposableEffect(visible) {
-        if (visible) ResourceMonitor.setDetailedMemoryEnabled(true)
-        onDispose {
-            if (visible) ResourceMonitor.setDetailedMemoryEnabled(false)
-        }
+    LifecycleStartEffect(visible) {
+        val lease = if (visible) ResourceMonitor.acquireVisibleConsumer() else null
+        onStopOrDispose { lease?.close() }
     }
 
     val pssMb = snapshot.breakdown.totalPssMb
@@ -91,7 +89,7 @@ fun V2ResourceHud(
                     Text(
                         text = String.format(Locale.US, "%02d:%02d", m, s),
                         style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 12.sp,
                         ),
                         color = colors.accent,
@@ -102,7 +100,7 @@ fun V2ResourceHud(
                 Text(
                     text = String.format(Locale.US, "CPU %.1f%%", snapshot.cpuPercent),
                     style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 11.sp,
                     ),
                     color = colors.textPrimary,
@@ -113,7 +111,7 @@ fun V2ResourceHud(
                 Text(
                     text = memoryText,
                     style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 11.sp,
                     ),
                     color = colors.textSecondary,
@@ -129,7 +127,7 @@ fun V2ResourceHud(
                     Text(
                         text = speedText,
                         style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 11.sp,
                         ),
                         color = colors.textSecondary,

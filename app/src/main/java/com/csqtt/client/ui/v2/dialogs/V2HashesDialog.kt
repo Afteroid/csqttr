@@ -160,7 +160,7 @@ fun V2HashesDialog(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Ручные хеши", Modifier.weight(1f), color = colors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Text("Ручные хеши", Modifier.weight(1f), color = colors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.Normal)
                 HappHelp("Ручные хеши", "Вставьте ссылки на звонки VK или готовые хеши. Доступно шесть полей. Проверка отмечает доступность каждого хеша; она не проверяет VPS или пароль туннеля.")
                 IconButton(onClick = { animateDismiss() }, modifier = Modifier.size(40.dp)) {
                     Icon(Icons.Default.Close, "Закрыть", tint = colors.textSecondary, modifier = Modifier.size(20.dp))
@@ -189,7 +189,7 @@ fun V2HashesDialog(
                                     text = "От владельца ${idx + 1}",
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         fontFamily = V2BodyFamily,
-                                        fontWeight = FontWeight.Bold,
+                                        fontWeight = FontWeight.Normal,
                                         fontSize = 13.sp,
                                     ),
                                     color = if (removed) colors.textMuted else colors.textPrimary,
@@ -248,7 +248,7 @@ fun V2HashesDialog(
                         text = "Свои хеши",
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = V2BodyFamily,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 13.sp,
                         ),
                         color = colors.textSecondary,
@@ -279,7 +279,7 @@ fun V2HashesDialog(
                         Surface(shape = RoundedCornerShape(14.dp), color = colors.field, border = BorderStroke(1.dp, colors.outline)) {
                             Row(Modifier.fillMaxWidth().height(50.dp).padding(start = 10.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.padding(end = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("${index + 1}", color = colors.accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                    Text("${index + 1}", color = colors.accent, fontSize = 13.sp, fontWeight = FontWeight.Normal)
                                     if (status == VkHashValidationStatus.Valid || invalid) {
                                         Icon(if (invalid) Icons.Default.Error else Icons.Default.CheckCircle,
                                             if (invalid) "Хеш ${index + 1}: недействителен" else "Хеш ${index + 1}: активен",

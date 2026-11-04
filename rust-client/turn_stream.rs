@@ -52,15 +52,45 @@ pub enum TurnStreamFrame {
 pub async fn connect(
     endpoint: &TurnEndpoint,
     server: SocketAddr,
+    gooby_proxy: Option<crate::gooby::GoobyProxy>,
 ) -> Result<(
     Arc<TurnStreamWriter>,
     TurnStreamReader,
     TurnStreamWriteFailure,
 )> {
-    let socket = timeout(STREAM_CONNECT_TIMEOUT, TcpStream::connect(server))
-        .await
-        .context("TURN TCP connect timed out")?
-        .with_context(|| format!("TURN {} connect {server}", endpoint.transport.as_str()))?;
+    connect_inner(endpoint, server, gooby_proxy, None).await
+}
+
+async fn connect_inner(
+    endpoint: &TurnEndpoint,
+    server: SocketAddr,
+    gooby_proxy: Option<crate::gooby::GoobyProxy>,
+    tls: Option<Arc<ClientConfig>>,
+) -> Result<(
+    Arc<TurnStreamWriter>,
+    TurnStreamReader,
+    TurnStreamWriteFailure,
+)> {
+    if endpoint.transport == TurnWireTransport::Udp {
+        bail!("UDP endpoint cannot create a TURN stream");
+    }
+    let socket = timeout(STREAM_CONNECT_TIMEOUT, async {
+        match gooby_proxy {
+            Some(proxy) => crate::gooby::connect(proxy, &endpoint.host, endpoint.port).await,
+            None => TcpStream::connect(server)
+                .await
+                .context("TURN TCP socket connect"),
+        }
+    })
+    .await
+    .context("TURN TCP/Gooby connect timed out")?
+    .with_context(|| {
+        format!(
+            "TURN {} connect {}",
+            endpoint.transport.as_str(),
+            endpoint.socket_authority()
+        )
+    })?;
     socket
         .set_nodelay(true)
         .context("TURN TCP_NODELAY configuration failed")?;
@@ -75,7 +105,7 @@ pub async fn connect(
         TurnWireTransport::Tls => {
             let server_name = ServerName::try_from(endpoint.tls_server_name()?.to_owned())
                 .context("TURN TLS server name is invalid")?;
-            let connector = TlsConnector::from(tls_config());
+            let connector = TlsConnector::from(tls.unwrap_or_else(tls_config));
             let stream = timeout(
                 STREAM_CONNECT_TIMEOUT,
                 connector.connect(server_name, socket),
@@ -301,6 +331,10 @@ fn tls_config() -> Arc<ClientConfig> {
 }
 
 #[cfg(test)]
+#[path = "turn_stream_gooby_tests.rs"]
+mod gooby_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
@@ -351,7 +385,7 @@ mod tests {
             port: address.port(),
             transport: TurnWireTransport::Tcp,
         };
-        let (_, mut reader, _) = connect(&endpoint, address).await.unwrap();
+        let (_, mut reader, _) = connect(&endpoint, address, None).await.unwrap();
         match reader.read_frame(&PacketPool::new(1)).await.unwrap() {
             TurnStreamFrame::Control(frame) => assert_eq!(frame.len(), 20),
             _ => panic!("expected control frame"),
@@ -382,7 +416,7 @@ mod tests {
             port: address.port(),
             transport: TurnWireTransport::Tcp,
         };
-        let (_, mut reader, _) = connect(&endpoint, address).await.unwrap();
+        let (_, mut reader, _) = connect(&endpoint, address, None).await.unwrap();
         match reader.read_frame(&PacketPool::new(1)).await.unwrap() {
             TurnStreamFrame::Data(packet) => {
                 assert_eq!(packet.as_slice(), &[0x40, 0, 0, 3, 0xa1, 0xb2, 0xc3, 0])
@@ -409,7 +443,7 @@ mod tests {
             port: address.port(),
             transport: TurnWireTransport::Tcp,
         };
-        let (_, mut reader, _) = connect(&endpoint, address).await.unwrap();
+        let (_, mut reader, _) = connect(&endpoint, address, None).await.unwrap();
         match reader.read_frame(&PacketPool::new(1)).await {
             Err(error) => assert!(error.to_string().contains("reserved type range")),
             Ok(_) => panic!("invalid TURN stream frame was accepted"),

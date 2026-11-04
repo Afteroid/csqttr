@@ -10,7 +10,9 @@ mod dns;
 #[path = "../shared/dtls.rs"]
 pub mod dtls;
 mod events;
+mod gooby;
 mod logging;
+mod stream_diagnostics;
 mod namegen;
 mod obfs;
 mod packet;
@@ -23,6 +25,7 @@ mod sni;
 mod spsc_ring;
 mod srtp_mode;
 mod stats;
+mod traffic_diagnostics;
 mod stun_codec;
 mod tun;
 mod turn;
@@ -111,6 +114,20 @@ struct Arguments {
     obfs: String,
     #[arg(long, default_value = "udp")]
     turn_transport: String,
+    /// Local Gooby SOCKS5 listener; only used with --turn-transport tcp.
+    #[arg(long, conflicts_with = "gooby")]
+    gooby_proxy: Option<gooby::GoobyProxy>,
+    /// Start the bundled Gooby engine for TURN TCP/TLS.
+    #[arg(long)]
+    gooby: bool,
+    /// Optional original Gooby ZIP rules; omitted = TURN/TCP split or TLS base.
+    #[arg(long, requires = "gooby")]
+    gooby_config: Option<std::path::PathBuf>,
+    #[arg(long, requires = "gooby")]
+    gooby_no_disorder: bool,
+    /// Built-in setup strategy; never applied to UDP or direct connections.
+    #[arg(long, requires = "gooby", conflicts_with = "gooby_config")]
+    gooby_strategy: Option<csqtt_gooby::Preset>,
     #[arg(long, default_value = "auto")]
     srtp_mode: String,
     #[arg(long = "gen", default_value_t = 0)]
@@ -218,6 +235,11 @@ fn runtime_worker_threads_with_limit(
 }
 
 async fn run(arguments: Arguments) -> Result<i32> {
+    let turn_transport = TurnTransportMode::parse(&arguments.turn_transport)?;
+    validate_gooby_transport(turn_transport, arguments.gooby_proxy)?;
+    if arguments.gooby && turn_transport == TurnTransportMode::Udp {
+        bail!("[КЛИЕНТ] Встроенный Gooby требует TCP/TLS");
+    }
     if arguments.validate_vk_hashes {
         run_vk_hash_validation(&arguments).await?;
         return Ok(EXIT_NORMAL);
@@ -240,10 +262,49 @@ async fn run(arguments: Arguments) -> Result<i32> {
     if password.is_empty() {
         bail!("[КЛИЕНТ] Нужен пароль в переменной CSQTT_PASSWORD");
     }
+    let embedded_gooby = if arguments.gooby {
+        let preset = arguments.gooby_strategy.unwrap_or_default();
+        let preset_name = if arguments.gooby_config.is_some() { "custom" } else { preset.name() };
+        crate::log_error!("[GOOBY] Выбрана стратегия: {preset_name}; обработка только при установлении соединения");
+        let bundle = match &arguments.gooby_config {
+            Some(path) => csqtt_gooby::ConfigBundle::from_zip_path(path)?,
+            None => csqtt_gooby::ConfigBundle::builtin_turn()?.with_preset(preset),
+        };
+        Some(
+            csqtt_gooby::Runtime::start_with_observer(
+                bundle,
+                !arguments.gooby_no_disorder,
+                Some(Arc::new(move |event| {
+                    let message = match event {
+                        csqtt_gooby::StrategyEvent::TurnAllocateSplit => {
+                            "TURN/TCP: разделение Allocate применено (без изменения TTL)"
+                        }
+                        csqtt_gooby::StrategyEvent::TlsClientHelloSplit => {
+                            "TLS: разделение ClientHello применено"
+                        }
+                        csqtt_gooby::StrategyEvent::Passthrough => {
+                            "Начальные данные не подходят для стратегии; переданы без обработки"
+                        }
+                    };
+                    crate::log_error!("[GOOBY] {message}; стратегия={preset_name}");
+                })),
+            )
+            .await
+            .context("запуск встроенного Gooby")?,
+        )
+    } else {
+        None
+    };
+    let gooby_proxy = match &embedded_gooby {
+        Some(runtime) => {
+            crate::log_error!("[КЛИЕНТ] Встроенный Gooby запущен");
+            Some(runtime.address().to_string().parse::<gooby::GoobyProxy>()?)
+        }
+        None => arguments.gooby_proxy,
+    };
     let mut stdin = spawn_stdin_reader();
     let peer = resolve_peer(&arguments.peer).await?;
     let mode = ObfsMode::parse(&arguments.obfs)?;
-    let turn_transport = TurnTransportMode::parse(&arguments.turn_transport)?;
     let srtp_mode = SrtpMode::parse(&arguments.srtp_mode)?;
     let wrap_key = derive_wrap_key(&password)?;
     let client_wrap_key = wrap_key;
@@ -367,6 +428,7 @@ async fn run(arguments: Arguments) -> Result<i32> {
         turn_port: (!arguments.port.is_empty()).then(|| Arc::from(arguments.port.as_str())),
         turn_ip_pool,
         turn_transport,
+        gooby_proxy,
         srtp_mode,
         hashes: hashes.into(),
         wrap_key,
@@ -497,6 +559,16 @@ async fn run(arguments: Arguments) -> Result<i32> {
         }
     }
     let termination = dispatcher.termination();
+    if let Some(runtime) = embedded_gooby {
+        let stats = runtime.stats();
+        crate::log_error!(
+            "[GOOBY] Обработано Allocate: {} | ClientHello: {} | Без обработки: {}",
+            stats.turn_allocate_requests,
+            stats.tls_client_hellos,
+            stats.passthrough_connections
+        );
+        runtime.shutdown().await;
+    }
     shutdown_events.stopped();
     crate::log_error!("[КЛИЕНТ] Все воркеры завершены");
     match termination {
@@ -555,6 +627,18 @@ fn should_leave_js_creator(js_hash_mode: bool, js_auth_mode: bool) -> bool {
     js_hash_mode && js_auth_mode
 }
 
+fn validate_gooby_transport(
+    mode: TurnTransportMode,
+    proxy: Option<gooby::GoobyProxy>,
+) -> Result<()> {
+    if proxy.is_some() && mode == TurnTransportMode::Udp {
+        bail!(
+            "[КЛИЕНТ] --gooby-proxy требует --turn-transport tcp (TCP/TLS); UDP через Gooby не поддерживается"
+        );
+    }
+    Ok(())
+}
+
 fn normalized_arguments() -> Vec<String> {
     std::env::args().map(normalize_cli_argument).collect()
 }
@@ -574,6 +658,10 @@ fn normalize_cli_argument(argument: String) -> String {
         "fingerprint",
         "obfs",
         "turn-transport",
+        "gooby-proxy",
+        "gooby",
+        "gooby-config",
+        "gooby-no-disorder",
         "srtp-mode",
         "gen",
         "salt",
@@ -867,6 +955,9 @@ fn print_configuration(
         arguments.obfs,
     );
     crate::log_error!("[WRAP] WRAP Ключ вычислен ✓");
+    if let Some(proxy) = params.gooby_proxy {
+        crate::log_error!("[КЛИЕНТ] Gooby: {proxy}; SOCKS5 CONNECT, без прямого fallback");
+    }
     crate::log_error!("[КЛИЕНТ] Captcha: {captcha}");
     if arguments.domain_routing {
         crate::log_error!(
@@ -888,6 +979,40 @@ fn print_configuration(
 
 #[cfg(test)]
 mod worker_count_tests {
+    #[test]
+    fn gooby_cli_is_opt_in_and_requires_tcp() {
+        use super::*;
+        let defaults = Arguments::try_parse_from(["client"]).unwrap();
+        assert!(defaults.gooby_proxy.is_none());
+        assert!(!defaults.gooby);
+        assert!(
+            Arguments::try_parse_from(["client", "--gooby", "--gooby-proxy", "127.0.0.1:1080"])
+                .is_err()
+        );
+        assert!(Arguments::try_parse_from(["client", "--gooby-config", "rules.zip"]).is_err());
+        assert!(
+            Arguments::try_parse_from(["client", "--gooby", "--turn-transport", "tcp"])
+                .unwrap()
+                .gooby
+        );
+        assert_eq!(defaults.turn_transport, "udp");
+        assert!(validate_gooby_transport(TurnTransportMode::Udp, None).is_ok());
+        let args = Arguments::try_parse_from(
+            [
+                "client",
+                "-turn-transport",
+                "tcp",
+                "-gooby-proxy",
+                "127.0.0.1:1080",
+            ]
+            .into_iter()
+            .map(|s| normalize_cli_argument(s.to_owned())),
+        )
+        .unwrap();
+        assert!(validate_gooby_transport(TurnTransportMode::TcpTls, args.gooby_proxy).is_ok());
+        assert!(validate_gooby_transport(TurnTransportMode::Udp, args.gooby_proxy).is_err());
+        assert!(Arguments::try_parse_from(["client", "--gooby-proxy", "bad"]).is_err());
+    }
     use super::*;
 
     #[test]

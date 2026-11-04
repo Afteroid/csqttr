@@ -75,7 +75,7 @@ fun FloatingToolbar(
         initialValue = "ALL",
     )
     val uiDesign by settingsStore.uiDesign.collectAsStateWithLifecycle(
-        initialValue = CsqttConstants.Theme.DESIGN_CLASSIC,
+        initialValue = com.csqtt.client.UiDesignPresets.DEFAULT,
     )
     var isExpanded by rememberSaveable { mutableStateOf(false) }
     var showQrScanner by rememberSaveable { mutableStateOf(false) }
@@ -336,29 +336,16 @@ fun FloatingToolbar(
                     CompactDropdownSetting(
                         title = "Дизайн",
                         selectedKey = uiDesign,
-                        options = listOf(
-                            CsqttConstants.Theme.DESIGN_CLASSIC to "Классический",
-                            CsqttConstants.Theme.DESIGN_V2 to "Новый",
-                        ),
+                        options = com.csqtt.client.UiDesignPresets.options,
                         enabled = true,
                         onSelected = { design -> scope.launch { settingsStore.saveUiDesign(design) } },
-                    )
-
-                    CsqttSettingRow(
-                        title = "Автопауза при Wi-Fi",
-                        checked = autoPauseOnWifi,
-                        onCheckedChange = onAutoPauseOnWifiChange,
-                        onInfoClick = { showAutoPauseInfo = true },
-                        infoContentDescription = "Как работает автопауза при Wi-Fi",
                     )
 
                     OutlinedButton(
                         onClick = { showWifiNetworkListDialog = true },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        val modeLabel = if (wifiNetworkListMode == "blacklist") "Чёрный список" else "Белый список"
-                        val count = com.csqtt.client.decodeWifiSsids(wifiNetworkListSsids).size
-                        Text("Wi-Fi списки · $modeLabel · $count")
+                        Text(com.csqtt.client.WifiCopy.TITLE + if (autoPauseOnWifi) " · Настроить" else " · Выключена")
                     }
 
                     CompactDropdownSetting(
@@ -384,9 +371,9 @@ fun FloatingToolbar(
                         )
                     }
 
-                    if (csqttLinkMode) {
+                    run {
                         CsqttSettingRow(
-                            title = "Показывать логи",
+                            title = "Показывать вкладку «Логи»",
                             checked = participantShowLogs,
                             onCheckedChange = { checked ->
                                 scope.launch { settingsStore.saveParticipantShowLogs(checked) }

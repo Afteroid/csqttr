@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
 
 private const val CMD_TIMEOUT = CsqttConstants.Timeouts.DEPLOY_CMD_TIMEOUT_MS
@@ -696,8 +697,21 @@ internal suspend fun performDeploy(
         if (!workingDir.mkdirs() && !workingDir.isDirectory) {
             throw IOException("Не удалось создать временный каталог установки")
         }
-        fun extractAsset(assetName: String): File {
+        suspend fun extractAsset(assetName: String): File {
             val target = File(workingDir, assetName)
+            if (context.assets.list("")?.contains("server-downloads.json") == true) {
+                val manifest = context.assets.open("server-downloads.json").bufferedReader().use { JSONObject(it.readText()) }
+                val entry = manifest.getJSONObject(assetName)
+                val artifact = com.csqtt.client.ServerCoreCache.Artifact(
+                    assetName, entry.getString("url"), entry.getLong("size"), entry.getString("sha256"))
+                onProgress(0.06f, "Загрузка и проверка серверного ядра...")
+                val job = kotlinx.coroutines.currentCoroutineContext()
+                val cached = com.csqtt.client.ServerCoreCache(File(context.filesDir, "server-cores"))
+                    .obtain(artifact, checkCancelled = { job.ensureActive() })
+                cached.copyTo(target, overwrite = true)
+                TunnelManager.addDeploySuccessLog("Серверное ядро проверено по SHA-256")
+                return target
+            }
             context.assets.open(assetName).use { input ->
                 FileOutputStream(target).use { output -> input.copyTo(output) }
             }

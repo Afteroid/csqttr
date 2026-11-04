@@ -176,8 +176,9 @@ class TunVpnService : VpnService() {
                 userSelected = serverRule.packages.filter { it.isNotEmpty() }.toSet()
             } else {
                 val settingsStore = SettingsStore(applicationContext)
-                isWhitelist = settingsStore.isWhitelist.first()
-                val savedApps = if (isWhitelist) {
+                val allApps = settingsStore.appRoutingAll.first() == true
+                isWhitelist = !allApps && settingsStore.isWhitelist.first()
+                val savedApps = if (allApps) "" else if (isWhitelist) {
                     settingsStore.whitelistApps.first()
                 } else {
                     settingsStore.excludedApps.first()
@@ -185,9 +186,7 @@ class TunVpnService : VpnService() {
                 userSelected = savedApps.split(",").filter { it.isNotEmpty() }.toSet()
             }
             val transportPackages = setOf(
-                applicationContext.packageName,
-                CsqttConstants.General.PACKAGE_VK,
-                CsqttConstants.General.PACKAGE_VK_CALLS
+                applicationContext.packageName
             )
 
             val existing = synchronized(interfaceLock) {

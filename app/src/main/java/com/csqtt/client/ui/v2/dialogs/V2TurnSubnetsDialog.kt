@@ -182,7 +182,7 @@ fun V2TurnSubnetsDialog(
                         text = "Выбор TURN подсетей",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontFamily = V2BodyFamily,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 18.sp,
                         ),
                         color = colors.textPrimary,
@@ -249,7 +249,7 @@ fun V2TurnSubnetsDialog(
                                     text = subnet.title,
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontFamily = V2BodyFamily,
-                                        fontWeight = if (isChecked) FontWeight.Bold else FontWeight.SemiBold,
+                                        fontWeight = FontWeight.Normal,
                                         fontSize = 15.sp,
                                     ),
                                     color = if (isEligible) colors.textPrimary else colors.textMuted,
@@ -286,7 +286,7 @@ fun V2TurnSubnetsDialog(
                                         text = if (ping > 0) "$ping мс" else "—",
                                         style = MaterialTheme.typography.labelMedium.copy(
                                             fontFamily = V2BodyFamily,
-                                            fontWeight = FontWeight.Bold,
+                                            fontWeight = FontWeight.Normal,
                                             fontSize = 13.sp,
                                         ),
                                         color = getPingColor(subnet.id),
@@ -326,7 +326,7 @@ fun V2TurnSubnetsDialog(
                         text = "Колл-во используемых IP",
                         style = MaterialTheme.typography.bodyLarge.copy(
                             fontFamily = V2BodyFamily,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 15.sp,
                         ),
                         color = colors.textPrimary,

@@ -98,7 +98,7 @@ fun V2SecretsDialog(
                 text = "Пароль туннеля",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Normal,
                 ),
                 color = colors.textPrimary,
                 modifier = Modifier.padding(top = 4.dp),
@@ -143,7 +143,7 @@ fun V2SecretsDialog(
                     text = if (passwordVisible) "Скрыть пароль" else "Показать пароль",
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = V2BodyFamily,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.Normal,
                     ),
                     color = colors.textSecondary,
                 )

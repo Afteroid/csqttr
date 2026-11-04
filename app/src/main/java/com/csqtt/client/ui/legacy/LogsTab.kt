@@ -57,26 +57,7 @@ import androidx.compose.foundation.BorderStroke
 
 @Composable
 fun LogsTab(settingsStore: SettingsStore) {
-    val loggingEnabled by settingsStore.loggingEnabled.collectAsStateWithLifecycle(initialValue = true)
-    val scope = rememberCoroutineScope()
-
     CsqttScreen {
-        AppSectionCard(
-            contentPadding = PaddingValues(horizontal = CsqttSpacing.Md, vertical = CsqttSpacing.Xs),
-            verticalArrangement = Arrangement.spacedBy(CsqttSpacing.None),
-        ) {
-            CsqttSettingRow(
-                title = stringResource(R.string.logs_enabled),
-                checked = loggingEnabled,
-                onCheckedChange = { enabled ->
-                    TunnelManager.isLoggingEnabled = enabled
-                    scope.launch {
-                        settingsStore.saveLoggingEnabled(enabled)
-                    }
-                },
-            )
-        }
-
         Surface(
             modifier = Modifier
                 .fillMaxWidth()

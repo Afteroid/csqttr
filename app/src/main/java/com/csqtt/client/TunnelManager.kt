@@ -157,7 +157,7 @@ object TunnelManager {
 
     private const val LOG_UI_FLUSH_MS = 120L
     private const val MAX_LOG_ENTRIES = 100
-    private const val MAX_PENDING_LOGS = 128
+    private const val MAX_PENDING_LOGS = 512
     private const val MAX_LOG_MESSAGE_LENGTH = 4_096
     private val pendingLogLock = Any()
     private val pendingLogs = LinkedHashMap<String, PendingLog>()
@@ -198,6 +198,8 @@ object TunnelManager {
     val unreadErrorCount = MutableStateFlow(0)
     val config = MutableStateFlow<String?>(null)
     val stats = MutableStateFlow("Ожидание данных...")
+    private val trafficTracker = TunnelTrafficTracker()
+    val traffic = trafficTracker.state
     val activeWorkers = MutableStateFlow(0)
     val autoPausedForWifi = MutableStateFlow(false)
     val vpnReady = MutableStateFlow(false)
@@ -223,6 +225,7 @@ object TunnelManager {
                 val isProcessActive = running.value || process != null
                 if (start > 0L && isProcessActive) {
                     uptimeSeconds.value = (SystemClock.elapsedRealtime() - start) / 1000L
+                    trafficTracker.expire(SystemClock.elapsedRealtime())
                 } else if (!isProcessActive && !starting.value) {
                     break
                 }
@@ -398,6 +401,7 @@ object TunnelManager {
                 nativeProcessPid = event.pid
             }
             is TunnelEventParser.Event.Stats -> {
+                trafficTracker.sample(identity.generation, event.bytesUp, event.bytesDown, SystemClock.elapsedRealtime())
                 activeWorkers.value = event.active
                 if (workerRecoveryPolicy.observe(event.active)) {
                     workerRecoveryJob?.cancel()
@@ -432,22 +436,8 @@ object TunnelManager {
             }
             is TunnelEventParser.Event.Dtls -> {
                 if (isCurrent(identity)) {
-                    val suffix = event.message.trim()
-                    val isError = suffix.contains("не состоялось") || suffix.contains("ошибка", ignoreCase = true)
-                    val level = if (isError) LogLevel.ERR else LogLevel.OK
-                    if (isError) {
-                        val message = "[DTLS] Поток ${event.worker}: $suffix"
-                        updateProcessLog(identity, "dtls_err_${event.worker}", message, 30, true, level)
-                    } else {
-                        val message = if (suffix.contains("завершено")) {
-                            "[DTLS] Рукопожатие завершено, ключи SRTP установлены ✓"
-                        } else if (suffix.isNotEmpty()) {
-                            "[DTLS] $suffix"
-                        } else {
-                            "[DTLS] Рукопожатие выполняется"
-                        }
-                        updateProcessLog(identity, "dtls_status", message, 30, false, LogLevel.OK)
-                    }
+                    val entry = DtlsLogParser.parse(event.worker, event.message)
+                    updateProcessLog(identity, entry.key, entry.message, entry.priority, entry.isError, entry.level)
                 }
             }
             is TunnelEventParser.Event.Config -> {
@@ -897,7 +887,7 @@ object TunnelManager {
     ) {
         if (identity != null && !isCurrent(identity)) return
         if (!isLoggingEnabled && !TunnelLogPolicy.isAllowedWhenInactiveLogging(key, isError, level)) return
-        val cleanMessage = maskOwnerHashes(withoutLogStickers(message), ownerHashes).take(MAX_LOG_MESSAGE_LENGTH)
+        val cleanMessage = NativeTunnelLogParser.redact(maskOwnerHashes(withoutLogStickers(message), ownerHashes)).take(MAX_LOG_MESSAGE_LENGTH)
         if (cleanMessage.isEmpty()) return
         val pendingKey = "${identity?.generation ?: 0L}:$key:$priority:$isError:${level?.name.orEmpty()}"
         synchronized(pendingLogLock) {
@@ -975,8 +965,10 @@ object TunnelManager {
             )
         }
 
-        while (logs.size > MAX_LOG_ENTRIES) {
-            logs.removeAt(0)
+        while (true) {
+            val eviction = StreamDiagnosticParser.evictionIndex(logs, MAX_LOG_ENTRIES)
+            if (eviction < 0) break
+            logs.removeAt(eviction)
         }
     }
 
@@ -1022,6 +1014,7 @@ object TunnelManager {
                     clearLogs()
                     config.value = null
                     stats.value = "Ожидание данных..."
+                    trafficTracker.reset()
                     wrapAuthTimeoutCount = 0
                     crashRestartStreak = 0
                     processStartedAtMs = 0L
@@ -1125,6 +1118,7 @@ object TunnelManager {
         cmd.add(params.obfsMode)
         cmd.add("-turn-transport")
         cmd.add(params.turnTransport)
+        cmd.addAll(GoobyPolicy.arguments(params.goobyEnabled, params.turnTransport, params.goobyStrategy))
         cmd.add("-srtp-mode")
         cmd.add(params.srtpMode)
         if (params.customTurnIps.isNotBlank()) {
@@ -1194,8 +1188,10 @@ object TunnelManager {
         pb.directory(context.filesDir)
         pb.redirectErrorStream(true)
         pb.environment()["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir
+        pb.environment()["TMPDIR"] = context.cacheDir.absolutePath
         pb.environment()[CsqttConstants.Tunnel.PROCESS_ENV_EVENTS] = "1"
         pb.environment()["RAYON_NUM_THREADS"] = "2"
+        pb.environment()["CSQTT_TRAFFIC_DIAGNOSTICS"] = if (isLoggingEnabled) "1" else "0"
         if (params.connectionPassword.isNotEmpty()) {
             pb.environment()["CSQTT_PASSWORD"] = params.connectionPassword
         }
@@ -1246,6 +1242,7 @@ object TunnelManager {
         callRecoveryPending.set(false)
         nativeProcessPid = processIdOf(startedProcess)
         processIdentity = identity
+        trafficTracker.beginProcess(identity.generation, SystemClock.elapsedRealtime())
         running.value = true
         startUptimeTimer()
         wrapAuthTimeoutCount = 0
@@ -1305,6 +1302,22 @@ object TunnelManager {
                             line
                         }
                     var lineTrim = stripped.trim()
+                    if (lineTrim.startsWith(TrafficDiagnosticParser.PREFIX)) {
+                        if (isLoggingEnabled) {
+                            TrafficDiagnosticParser.parse(lineTrim)?.let { entry ->
+                                updateProcessLog(identity, entry.key, entry.message, entry.priority, entry.isError, entry.level)
+                            }
+                        }
+                        return@forEachLine
+                    }
+                    if (lineTrim.startsWith(StreamDiagnosticParser.PREFIX)) {
+                        if (isLoggingEnabled) {
+                            StreamDiagnosticParser.parse(lineTrim)?.let { entry ->
+                                updateProcessLog(identity, entry.key, entry.message, entry.priority, entry.isError, entry.level)
+                            }
+                        }
+                        return@forEachLine
+                    }
                     val eventPrefix = CsqttConstants.General.CSQTT_EVENT_PREFIX
                     val eventIdx = lineTrim.indexOf(eventPrefix)
                     if (eventIdx >= 0) {
@@ -1324,6 +1337,21 @@ object TunnelManager {
                         }
                     }
 
+                    // Keep Gooby's dedicated event keys and severity classification.
+                    val goobyLog = GoobyLogParser.parse(lineTrim)
+                    if (goobyLog != null) {
+                        if (goobyLog.isError) lastDiagnostic = goobyLog.message.take(240)
+                        updateProcessLog(
+                            identity,
+                            goobyLog.key,
+                            goobyLog.message,
+                            goobyLog.priority,
+                            goobyLog.isError,
+                            goobyLog.level,
+                        )
+                        return@forEachLine
+                    }
+
                     val isCritical = lineTrim.startsWith("CAPTCHA_SOLVE|") ||
                         lineTrim.contains("FATAL_") ||
                         lineTrim.contains("[ФАТАЛ]", true) ||
@@ -1337,6 +1365,10 @@ object TunnelManager {
                         lineTrim.startsWith("[ПОТОКИ]") ||
                         lineTrim.startsWith("[VK JS]") ||
                         lineTrim.contains("DENIED:", true) ||
+                        lineTrim.startsWith("[ДИАГНОСТИКА]") ||
+                        lineTrim.contains("таймаут", true) ||
+                        lineTrim.contains("timeout", true) ||
+                        lineTrim.contains("не состоял", true) ||
                         lineTrim.contains("Ошибка", true) ||
                         lineTrim.contains("error", true) ||
                         lineTrim.contains("FAIL", true)
@@ -1350,6 +1382,11 @@ object TunnelManager {
                     }
 
                     if (TunnelLogPolicy.isInternalRecovery(lineTrim)) {
+                        if (isLoggingEnabled) {
+                            NativeTunnelLogParser.parse(lineTrim)?.let { entry ->
+                                updateProcessLog(identity, entry.key, entry.message, entry.priority, entry.isError, entry.level)
+                            }
+                        }
                         return@forEachLine
                     }
 
@@ -1505,7 +1542,7 @@ object TunnelManager {
                             val suffix = if (failed) "" else " ✓"
                             updateProcessLog(identity, "vk_js_account_fallback_progress", "[VK JS] $text$suffix", 17, failed, if (failed) LogLevel.ERR else LogLevel.OK)
                         }
-                        lineTrim.contains("[WRAP]") -> {
+                        lineTrim.contains("[WRAP]") && lineTrim.contains("Ключ вычислен", true) && !isError -> {
                             updateProcessLog(identity, "wrap_status", "[WRAP] Ключ вычислен ✓", 10, false, LogLevel.OK)
                         }
                         lineTrim.startsWith("[ПОТОКИ]") -> {
@@ -1521,24 +1558,11 @@ object TunnelManager {
                                 text.contains("Перезапуск", true) -> "stream_probe_restart" to 59
                                 else -> "stream_probe_${text.take(24).hashCode()}" to 59
                             }
-                            updateProcessLog(identity, stableKey, "[ПОТОКИ] $text", priority, isRepair, if (isRepair) LogLevel.ERR else LogLevel.LOG)
+                            updateProcessLog(identity, stableKey, "[ПОТОКИ] $text", priority, isRepair, if (isRepair) LogLevel.ERR else LogLevel.PING)
                         }
                         lineTrim.contains("[TURN]") -> {
-                            val text = lineTrim.substringAfter("[TURN]").trim()
-                            if (text.contains("Используются TURN IP", true)) {
-                                return@forEachLine
-                            }
-                            val turnError = TunnelLogPolicy.isTurnStreamFailure(lineTrim) || isError
-                            val (stableKey, priority) = when {
-                                turnError -> "turn_error_${text.hashCode()}" to 99
-                                text.contains("CreatePermission", true) -> "turn_permission_status" to 52
-                                text.contains("ChannelBind", true) || text.contains("Канал", true) -> "turn_channel_status" to 53
-                                text.contains("готова к передаче", true) -> "turn_ready_status" to 54
-                                text.contains("Refresh", true) -> "turn_refresh_status" to 55
-                                else -> null to 0
-                            }
-                            if (stableKey != null) {
-                                updateProcessLog(identity, stableKey, "[TURN] $text", priority, turnError, if (turnError) LogLevel.ERR else LogLevel.LOG)
+                            NativeTunnelLogParser.parse(lineTrim)?.let { entry ->
+                                updateProcessLog(identity, entry.key, entry.message, entry.priority, entry.isError, entry.level)
                             }
                         }
                         lineTrim.contains("Рукопожатие...") ->
@@ -1560,6 +1584,9 @@ object TunnelManager {
                             }
                             updateProcessLog(identity, errorKey, errorMessage, 99, true)
                         }
+                        else -> NativeTunnelLogParser.parse(lineTrim)?.let { entry ->
+                            updateProcessLog(identity, entry.key, entry.message, entry.priority, entry.isError, entry.level)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -1574,6 +1601,7 @@ object TunnelManager {
                 runCatching { reader.close() }
                 startStopMutex.withLock {
                     if (processIdentity === identity && process === targetProcess) {
+                        trafficTracker.endProcess(identity.generation)
                         val lifecycleWantsRestart = lifecycleState.processEnded(identity.ticket)
                         process = null
                         processIdentity = null
@@ -1698,6 +1726,7 @@ object TunnelManager {
         finishVkCalls: Boolean = false,
     ) {
         val targetProcess = identity?.process ?: process
+        trafficTracker.endProcess(identity?.generation)
         if (targetProcess == null) {
             process = null
             processIdentity = null
@@ -2138,6 +2167,8 @@ data class TunnelParams(
     val clientIds: String = CsqttConstants.Tunnel.DEFAULT_CLIENT_IDS,
     val obfsMode: String = CsqttConstants.Tunnel.DEFAULT_OBFS_MODE,
     val turnTransport: String = CsqttConstants.Tunnel.DEFAULT_TURN_TRANSPORT,
+    val goobyEnabled: Boolean = false,
+    val goobyStrategy: String = GoobyPolicy.DEFAULT_STRATEGY,
     val srtpMode: String = CsqttConstants.SrtpMode.DEFAULT,
     val generationId: Long = 0,
     val sessionSalt: String = "",

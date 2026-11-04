@@ -5,6 +5,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
+import android.location.LocationManager
+import androidx.core.location.LocationManagerCompat
 import androidx.core.content.ContextCompat
 
 internal fun hasWifiSsidPermission(context: Context): Boolean =
@@ -13,10 +15,13 @@ internal fun hasWifiSsidPermission(context: Context): Boolean =
         Manifest.permission.ACCESS_FINE_LOCATION,
     ) == PackageManager.PERMISSION_GRANTED
 
+internal fun hasWifiSsidAccess(context: Context): Boolean = hasWifiSsidPermission(context) &&
+    LocationManagerCompat.isLocationEnabled(context.getSystemService(LocationManager::class.java))
+
 @SuppressLint("MissingPermission")
 @Suppress("DEPRECATION")
 internal fun currentWifiSsid(context: Context): String? {
-    if (!hasWifiSsidPermission(context)) return null
+    if (!hasWifiSsidAccess(context)) return null
     return runCatching {
         val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
         normalizeWifiSsid(wifiManager?.connectionInfo?.ssid)

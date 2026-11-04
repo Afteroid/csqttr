@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
+import com.csqtt.client.showRaisedToast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -115,7 +116,7 @@ fun V2ImportExportDialog(
 
     val executeImportJson: (String) -> Unit = { jsonText ->
         if (jsonText.isBlank()) {
-            Toast.makeText(context, "Конфигурация пуста", Toast.LENGTH_SHORT).show()
+            context.showRaisedToast("Конфигурация пуста")
         } else {
             scope.launch {
                 isProcessing = true
@@ -128,13 +129,13 @@ fun V2ImportExportDialog(
                         includeSettings = includeSettings,
                     )
                     if (ok) {
-                        Toast.makeText(context, "Конфигурация успешно импортирована ✓", Toast.LENGTH_LONG).show()
+                        context.showRaisedToast("Конфигурация успешно импортирована ✓")
                         onDismissRequest()
                     } else {
-                        Toast.makeText(context, "Ошибка импорта: неверный формат JSON", Toast.LENGTH_SHORT).show()
+                        context.showRaisedToast("Ошибка импорта: неверный формат JSON")
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Ошибка импорта: ${e.message}", Toast.LENGTH_SHORT).show()
+                    context.showRaisedToast("Ошибка импорта: ${e.message}")
                 } finally {
                     isProcessing = false
                 }
@@ -152,7 +153,7 @@ fun V2ImportExportDialog(
                     executeImportJson(text)
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, "Не удалось прочитать файл: ${e.message}", Toast.LENGTH_SHORT).show()
+                context.showRaisedToast("Не удалось прочитать файл: ${e.message}")
             }
         }
     }
@@ -194,7 +195,7 @@ fun V2ImportExportDialog(
                 text = "Разделы конфигурации",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Normal,
                 ),
                 color = colors.textPrimary,
             )
@@ -233,9 +234,9 @@ fun V2ImportExportDialog(
                                         includeSettings = includeSettings,
                                     )
                                     clipboardManager.setText(AnnotatedString(json))
-                                    Toast.makeText(context, "Конфиг скопирован в буфер ✓", Toast.LENGTH_SHORT).show()
+                                    context.showRaisedToast("Конфиг скопирован в буфер ✓")
                                 } catch (e: Exception) {
-                                    Toast.makeText(context, "Ошибка экспорта: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    context.showRaisedToast("Ошибка экспорта: ${e.message}")
                                 } finally {
                                     isProcessing = false
                                 }
@@ -262,12 +263,12 @@ fun V2ImportExportDialog(
                                     )
                                     val savedPath = saveJsonToDownloads(context, json)
                                     if (savedPath != null) {
-                                        Toast.makeText(context, "Сохранено: $savedPath ✓", Toast.LENGTH_LONG).show()
+                                        context.showRaisedToast("Сохранено: $savedPath ✓")
                                     } else {
-                                        Toast.makeText(context, "Не удалось сохранить файл", Toast.LENGTH_SHORT).show()
+                                        context.showRaisedToast("Не удалось сохранить файл")
                                     }
                                 } catch (e: Exception) {
-                                    Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    context.showRaisedToast("Ошибка: ${e.message}")
                                 } finally {
                                     isProcessing = false
                                 }
@@ -292,7 +293,7 @@ fun V2ImportExportDialog(
                             if (!clip.isNullOrBlank()) {
                                 executeImportJson(clip.trim())
                             } else {
-                                Toast.makeText(context, "Буфер обмена пуст", Toast.LENGTH_SHORT).show()
+                                context.showRaisedToast("Буфер обмена пуст")
                             }
                         },
                         style = V2PillStyle.Contrast,
@@ -349,7 +350,7 @@ private fun V2ConfigOptionRow(
             text = title,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontFamily = V2BodyFamily,
-                fontWeight = if (checked) FontWeight.ExtraBold else FontWeight.Normal,
+                fontWeight = FontWeight.Normal,
             ),
             color = if (checked) colors.textPrimary else colors.textSecondary,
         )

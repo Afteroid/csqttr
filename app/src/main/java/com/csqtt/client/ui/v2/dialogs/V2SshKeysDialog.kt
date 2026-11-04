@@ -136,7 +136,7 @@ fun V2SshKeysDialog(
                         text = "Ключи SSH",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontFamily = V2BodyFamily,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 18.sp,
                         ),
                         color = colors.textPrimary,
@@ -167,7 +167,7 @@ fun V2SshKeysDialog(
                 text = "Приватный SSH-ключ *",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Normal,
                     fontSize = 13.sp,
                 ),
                 color = colors.textSecondary,
@@ -217,7 +217,7 @@ fun V2SshKeysDialog(
                 text = "Пароль ключа (необязательно)",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Normal,
                     fontSize = 13.sp,
                 ),
                 color = colors.textSecondary,
@@ -252,7 +252,7 @@ fun V2SshKeysDialog(
                 text = "SSH-сертификат OpenSSH (необязательно)",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Normal,
                     fontSize = 13.sp,
                 ),
                 color = colors.textSecondary,

@@ -305,7 +305,7 @@ private fun V2AddProfileMenuItem(
                     text = title,
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontFamily = V2BodyFamily,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 15.sp,
                     ),
                     color = colors.textPrimary,
@@ -511,7 +511,7 @@ fun V2SubscriptionImportDialog(
                     text = "Скачивать по HTTP",
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontFamily = V2BodyFamily,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 15.sp,
                     ),
                     color = if (!busy) colors.textPrimary else colors.textMuted,
@@ -542,7 +542,7 @@ fun V2SubscriptionImportDialog(
                         text = data.title,
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontFamily = V2BodyFamily,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Normal,
                         ),
                         color = colors.textPrimary,
                         maxLines = 2,
@@ -564,7 +564,7 @@ fun V2SubscriptionImportDialog(
                                     text = node.name,
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontFamily = V2BodyFamily,
-                                        fontWeight = FontWeight.Bold,
+                                        fontWeight = FontWeight.Normal,
                                     ),
                                     color = colors.textPrimary,
                                     maxLines = 1,

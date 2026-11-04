@@ -60,7 +60,7 @@ fun V2InfoRow(
                 text = label,
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Normal,
                     fontSize = 15.sp,
                 ),
                 color = colors.textSecondary,
@@ -70,7 +70,7 @@ fun V2InfoRow(
                 text = value,
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Normal,
                     fontSize = 15.sp,
                 ),
                 color = colors.textPrimary,
@@ -105,7 +105,7 @@ fun V2LabeledField(
                 text = label,
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.Normal,
                     fontSize = 13.sp,
                 ),
                 color = colors.textSecondary,
@@ -117,7 +117,7 @@ fun V2LabeledField(
                     text = value,
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontFamily = V2BodyFamily,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 15.sp,
                     ),
                     color = colors.textPrimary,
@@ -159,7 +159,7 @@ fun V2SecretPathField(
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontFamily = V2BodyFamily,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Normal,
                     fontSize = 15.sp,
                 ),
                 color = colors.textPrimary,
@@ -241,7 +241,7 @@ fun V2SecretPathField(
                     text = value,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontFamily = V2BodyFamily,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 14.sp,
                     ),
                     color = colors.textPrimary,

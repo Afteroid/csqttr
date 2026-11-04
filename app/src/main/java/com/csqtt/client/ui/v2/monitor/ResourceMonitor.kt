@@ -7,12 +7,9 @@ import android.os.SystemClock
 import com.csqtt.client.TunnelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.RandomAccessFile
 
@@ -52,8 +49,8 @@ data class MeasurementSession(
 )
 
 object ResourceMonitor {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var monitorJob: Job? = null
+    // Sampling and measurement commands are serialized off the UI thread.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
     private val _snapshot = MutableStateFlow(ResourceSnapshot())
     val snapshot = _snapshot.asStateFlow()
@@ -67,21 +64,8 @@ object ResourceMonitor {
     private var lastRxBytes = -1L
     private var lastTxBytes = -1L
 
-    @Volatile
-    private var detailedMemoryEnabled = false
-    private val detailedMemoryRequests = java.util.concurrent.atomic.AtomicInteger(0)
     private var detailedSampleTick = 0
     private var lastBreakdown = MemoryBreakdown()
-
-    /** Requests or releases the expensive PSS breakdown sampling (reading /proc/self/smaps). */
-    fun setDetailedMemoryEnabled(enabled: Boolean) {
-        val count = if (enabled) {
-            detailedMemoryRequests.incrementAndGet()
-        } else {
-            detailedMemoryRequests.updateAndGet { current -> (current - 1).coerceAtLeast(0) }
-        }
-        detailedMemoryEnabled = count > 0
-    }
 
     // Benchmark session accumulators
     private var sessionStartTime = 0L
@@ -92,60 +76,75 @@ object ResourceMonitor {
     private var sessionPeakRam = 0f
     private var sessionStartRx = 0L
     private var sessionStartTx = 0L
+    private var sessionNeedsBaseline = false
 
-    init {
-        startMonitoring()
-    }
+    private val sampling = ResourceSamplingLoop(
+        scope = scope,
+        onResume = {
+            // Do not average CPU / traffic across a period with no observation.
+            lastCpuTime = -1L
+            lastAppCpuTime = -1L
+            lastTrafficSampleTime = -1L
+            lastRxBytes = -1L
+            lastTxBytes = -1L
+            detailedSampleTick = 0
+            lastBreakdown = MemoryBreakdown()
+        },
+        sample = { sample() },
+    )
 
-    fun startMonitoring() {
-        if (monitorJob?.isActive == true) return
-        monitorJob = scope.launch {
-            while (isActive) {
-                sample()
-                delay(800)
-            }
+    /** The UI owns this lease only while visible and its lifecycle is STARTED. */
+    fun acquireVisibleConsumer(): AutoCloseable = sampling.acquireVisibleConsumer()
+
+    fun startMeasurement() {
+        scope.launch {
+            val myUid = Process.myUid()
+            sessionStartTime = SystemClock.elapsedRealtime()
+            sessionCpuSum = 0.0
+            sessionCpuSamples = 0
+            sessionPeakCpu = 0f
+            sessionStartRam = 0f
+            sessionPeakRam = 0f
+            sessionNeedsBaseline = true
+            sessionStartRx = TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0)
+            sessionStartTx = TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0)
+
+            _session.value = MeasurementSession(
+                isActive = true,
+                elapsedSeconds = 0,
+                peakCpuPercent = sessionPeakCpu,
+                avgCpuPercent = 0f,
+                startRamMb = sessionStartRam,
+                currentRamMb = 0f,
+                peakRamMb = sessionPeakRam,
+                totalBytesTransferred = 0,
+                samplesCount = 0,
+            )
+            sampling.setMeasurementActive(true)
         }
     }
 
-    fun startMeasurement() {
-        val currentSnap = _snapshot.value
-        val myUid = Process.myUid()
-        sessionStartTime = SystemClock.elapsedRealtime()
-        sessionCpuSum = 0.0
-        sessionCpuSamples = 0
-        sessionPeakCpu = currentSnap.cpuPercent
-        sessionStartRam = currentSnap.ramMb
-        sessionPeakRam = currentSnap.ramMb
-        sessionStartRx = TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0)
-        sessionStartTx = TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0)
-
-        _session.value = MeasurementSession(
-            isActive = true,
-            elapsedSeconds = 0,
-            peakCpuPercent = sessionPeakCpu,
-            avgCpuPercent = currentSnap.cpuPercent,
-            startRamMb = sessionStartRam,
-            currentRamMb = currentSnap.ramMb,
-            peakRamMb = sessionPeakRam,
-            totalBytesTransferred = 0,
-            samplesCount = 1,
-        )
-    }
-
     fun stopMeasurement() {
-        _session.value = _session.value.copy(isActive = false)
+        scope.launch {
+            _session.value = _session.value.copy(isActive = false)
+            sampling.setMeasurementActive(false)
+        }
     }
 
     fun resetMeasurement() {
-        _session.value = MeasurementSession()
-        sessionStartTime = 0L
-        sessionCpuSum = 0.0
-        sessionCpuSamples = 0
-        sessionPeakCpu = 0f
-        sessionStartRam = 0f
-        sessionPeakRam = 0f
-        sessionStartRx = 0L
-        sessionStartTx = 0L
+        scope.launch {
+            _session.value = MeasurementSession()
+            sessionStartTime = 0L
+            sessionCpuSum = 0.0
+            sessionCpuSamples = 0
+            sessionPeakCpu = 0f
+            sessionStartRam = 0f
+            sessionPeakRam = 0f
+            sessionStartRx = 0L
+            sessionStartTx = 0L
+            sessionNeedsBaseline = false
+            sampling.setMeasurementActive(false)
+        }
     }
 
     private fun sample() {
@@ -175,7 +174,7 @@ object ResourceMonitor {
         val activeWorkers = TunnelManager.activeWorkers.value
         val running = TunnelManager.running.value
 
-        if (detailedMemoryEnabled && detailedSampleTick++ % 6 == 0) {
+        if (sampling.hasVisibleConsumers && detailedSampleTick++ % 6 == 0) {
             lastBreakdown = readMemoryBreakdown()
         }
 
@@ -194,6 +193,11 @@ object ResourceMonitor {
 
         // Update active benchmark session
         if (_session.value.isActive && sessionStartTime > 0) {
+            if (sessionNeedsBaseline) {
+                sessionStartRam = ramMb
+                sessionPeakRam = ramMb
+                sessionNeedsBaseline = false
+            }
             val elapsedSec = (now - sessionStartTime) / 1000L
             sessionCpuSum += cpu
             sessionCpuSamples++

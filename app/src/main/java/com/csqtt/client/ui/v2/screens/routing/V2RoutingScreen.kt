@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -28,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -43,6 +45,8 @@ import com.csqtt.client.ui.legacy.AppItem
 import com.csqtt.client.ui.v2.components.V2Card
 import com.csqtt.client.ui.v2.components.V2Chevron
 import com.csqtt.client.ui.v2.components.V2TopBar
+import com.csqtt.client.ui.v2.components.V2AdaptiveScreen
+import com.csqtt.client.ui.v2.components.LocalV2AdaptiveMetrics
 import com.csqtt.client.ui.v2.design.V2Shapes
 import com.csqtt.client.ui.v2.design.V2Sizes
 import com.csqtt.client.ui.v2.design.V2Spacing
@@ -54,6 +58,7 @@ import kotlinx.coroutines.withContext
 private object V2AppCache {
     @Volatile
     var cachedList: List<AppItem>? = null
+    var labelCache: Map<String, Pair<String, String>> = emptyMap()
 }
 
 @Composable
@@ -65,8 +70,12 @@ fun V2RoutingScreen(
     onVersionClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current.applicationContext
+    val profile by settingsStore.activeProfile.collectAsStateWithLifecycle(0)
+    val appRoutingAll by settingsStore.appRoutingAll.collectAsStateWithLifecycle(null)
+    val showSystemApps by settingsStore.showSystemApps.collectAsStateWithLifecycle(false)
+    val presetsUsed by settingsStore.appPresetsUsed.collectAsStateWithLifecycle(emptySet())
     val scope = rememberCoroutineScope()
-    val colors = V2Theme.colors
+    val colors = routingColors()
 
     val serverRoutingActiveLive by TunnelManager.serverRoutingActive.collectAsStateWithLifecycle()
     val isServerRouting = serverRoutingActiveLive
@@ -114,7 +123,7 @@ fun V2RoutingScreen(
     }
 
     var appsList by remember { mutableStateOf(V2AppCache.cachedList.orEmpty()) }
-    var isAppsLoading by remember { mutableStateOf(false) }
+    var isAppsLoading by remember { mutableStateOf(V2AppCache.cachedList == null) }
     var isMigrationReady by remember { mutableStateOf(false) }
 
     var showAppsDialog by rememberSaveable { mutableStateOf(false) }
@@ -131,41 +140,35 @@ fun V2RoutingScreen(
     // keeps the routing tab light even on devices with hundreds of installed applications.
     LaunchedEffect(showAppsDialog) {
         if (!showAppsDialog) return@LaunchedEffect
-        V2AppCache.cachedList?.let {
-            appsList = it
-            isAppsLoading = false
-            return@LaunchedEffect
-        }
+        // Keep cached rows visible, but refresh installed packages on every opening.
+        // No polling/background receiver; new installations appear on the next opening.
         isAppsLoading = true
         val loadedApps = withContext(Dispatchers.IO) {
             val packageManager = context.packageManager
+            val previousLabels = V2AppCache.labelCache
+            val labels = mutableMapOf<String, Pair<String, String>>()
+            val locale = context.resources.configuration.locales.toLanguageTags()
             val apps = packageManager
-                .getInstalledApplications(PackageManager.GET_META_DATA)
+                .getInstalledApplications(0)
                 .asSequence()
                 .filter { app ->
-                    app.packageName != context.packageName &&
-                        !app.packageName.contains("vkontakte") &&
-                        !app.packageName.contains("vk.calls")
+                    app.packageName != context.packageName
                 }
                 .map { app ->
+                    val fingerprint = "${app.sourceDir}|$locale"
+                    val name = previousLabels[app.packageName]?.takeIf { it.first == fingerprint }?.second
+                        ?: runCatching { app.loadLabel(packageManager).toString() }.getOrDefault(app.packageName)
+                    labels[app.packageName] = fingerprint to name
                     AppItem(
-                        name = app.loadLabel(packageManager).toString(),
+                        name = name,
                         packageName = app.packageName,
-                        icon = runCatching {
-                            // Icons are shown at 40dp; decoding them at full intrinsic size
-                            // (often 192-432 px) for every installed app wasted ~100 MB.
-                            app.loadIcon(packageManager)
-                                .toBitmap(width = 96, height = 96)
-                                .asImageBitmap()
-                        }.getOrNull(),
+                        icon = null, // Visible rows load icons lazily; never delay mode selection.
                         isSystem = (app.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
                     )
                 }
-                .sortedWith(compareBy<AppItem> { it.isSystem }.thenBy { it.name.lowercase() })
+                .sortedWith(compareBy<AppItem> { it.name.lowercase() }.thenBy { it.packageName })
                 .toList()
-            // Release the temporary full-size drawable bitmaps right away instead of
-            // keeping the transient spike in the native heap until the next GC.
-            Runtime.getRuntime().gc()
+            V2AppCache.labelCache = labels
             apps
         }
         V2AppCache.cachedList = loadedApps
@@ -182,11 +185,12 @@ fun V2RoutingScreen(
         }
     }
 
-    Column(
+    V2AdaptiveScreen(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = V2Sizes.ScreenPadding),
     ) {
+        val layout = LocalV2AdaptiveMetrics.current
         V2TopBar(
             version = version,
             title = "Роутинг",
@@ -197,11 +201,11 @@ fun V2RoutingScreen(
             modifier = Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = V2Spacing.Xxl),
-            verticalArrangement = Arrangement.spacedBy(V2Spacing.Sm),
+                .padding(bottom = layout.gap),
+            verticalArrangement = Arrangement.spacedBy(layout.gap),
         ) {
             if (isServerRouting) {
-                V2Card {
+                V2Card(color = colors.surface) {
                     Text(
                         text = "Маршрутизация синхронизирована с сервером",
                         style = MaterialTheme.typography.titleMedium,
@@ -216,7 +220,7 @@ fun V2RoutingScreen(
                 V2RoutingCard(
                     badge = "APP",
                     title = "Маршрутизация приложений",
-                    countLabel = appsCountLabel(
+                    countLabel = if (appRoutingAll == true) "Все приложения в туннеле" else appsCountLabel(
                         isWhitelist = isWhitelist,
                         blacklistSize = persistedBlacklist.size,
                         whitelistSize = persistedWhitelist.size,
@@ -243,6 +247,7 @@ fun V2RoutingScreen(
                 )
                 V2Card(
                     onClick = { showRulesTransferDialog = true },
+                    color = colors.surface,
                     contentPadding = PaddingValues(
                         horizontal = V2Spacing.Lg,
                         vertical = V2Spacing.Md,
@@ -251,7 +256,7 @@ fun V2RoutingScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(V2Sizes.RowHeight - 16.dp),
+                            .heightIn(min = ((layout.height - 56.dp - layout.gap * 4) / 4 - V2Spacing.Md * 2).coerceIn(48.dp, 180.dp)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
@@ -277,30 +282,34 @@ fun V2RoutingScreen(
         }
     }
 
-    if (showAppsDialog) {
+    if (showAppsDialog && isMigrationReady) {
+        androidx.compose.runtime.key(profile) {
         V2AppsRoutingDialog(
             appsList = appsList,
             isAppsLoading = isAppsLoading || !isMigrationReady,
             isWhitelist = isWhitelist,
             blacklist = persistedBlacklist,
             whitelist = persistedWhitelist,
-            onClose = { black, white, modeWhite ->
+            presetsUsed = presetsUsed,
+            allAppsMode = appRoutingAll,
+            showSystemApps = showSystemApps,
+            onShowSystemAppsChange = { enabled -> scope.launch { settingsStore.saveShowSystemApps(enabled) } },
+            onClose = { black, white, modeWhite, used, allApps ->
                 showAppsDialog = false
-                val modeChanged = modeWhite != isWhitelist
-                val blackChanged = black != persistedBlacklist
-                val whiteChanged = white != persistedWhitelist
-                if (modeChanged || blackChanged || whiteChanged) {
+                val modeChanged = modeWhite != isWhitelist || allApps != (appRoutingAll ?: (!isWhitelist && persistedBlacklist.isEmpty()))
+                val blackChanged = black.toList() != persistedBlacklist.toList()
+                val whiteChanged = white.toList() != persistedWhitelist.toList()
+                if (modeChanged || blackChanged || whiteChanged || used != presetsUsed) {
                     scope.launch {
-                        if (modeChanged) settingsStore.saveIsWhitelist(modeWhite)
-                        if (blackChanged) settingsStore.saveExcludedApps(black.sorted().joinToString(","))
-                        if (whiteChanged) settingsStore.saveWhitelistApps(white.sorted().joinToString(","))
-                        TunnelManager.reloadVpn()
+                        settingsStore.saveAppRoutingSelection(black.joinToString(","), white.joinToString(","), modeWhite, used, profile, allApps)
+                        if (modeChanged || blackChanged || whiteChanged) TunnelManager.reloadVpn()
                     }
                 }
             },
         )
     }
 
+    }
     if (showDomainsDialog) {
         V2DomainsRoutingDialog(
             isWhitelist = domainIsWhitelist,
@@ -386,10 +395,15 @@ private fun V2RoutingCard(
     countLabel: String,
     onClick: () -> Unit,
 ) {
-    val colors = V2Theme.colors
+    val colors = routingColors()
+    val layout = LocalV2AdaptiveMetrics.current
     V2Card(
+        modifier = Modifier.testTag("routing-card-$badge"),
         onClick = onClick,
+        color = colors.surface,
         contentPadding = PaddingValues(V2Spacing.Md),
+        contentModifier = Modifier.heightIn(min = ((layout.height - 56.dp - layout.gap * 4) / 4).coerceIn(96.dp, 208.dp)),
+        verticalArrangement = Arrangement.Center,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -406,15 +420,15 @@ private fun V2RoutingCard(
                 Text(
                     text = badge,
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Normal,
                     color = colors.onContrast,
                 )
             }
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 color = colors.textPrimary,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )

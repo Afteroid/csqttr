@@ -211,6 +211,7 @@ private fun showDeployToast(context: android.content.Context, message: String) {
 internal fun DeployTab(
     settingsStore: SettingsStore,
     savedSettings: DeploySettingsSnapshot,
+    checkState: LegacyDeployCheckState = remember(savedSettings.profile) { LegacyDeployCheckState() },
 ) {
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
@@ -259,12 +260,15 @@ internal fun DeployTab(
     var showPanelInfoDialog by rememberSaveable(savedSettings.profile) { mutableStateOf(false) }
     var showSshKeysDialog by rememberSaveable(savedSettings.profile) { mutableStateOf(false) }
     var showDockerInfoDialog by rememberSaveable(savedSettings.profile) { mutableStateOf(false) }
-    // the server check's result while its dialog is open (a rotation closes it: the check is run again)
-    var checkPlan by remember(savedSettings.profile) { mutableStateOf<DeployPlan?>(null) }
+    var checkPlan by checkState.plan
     var removable by remember(savedSettings.profile) { mutableStateOf<List<FoundServer>?>(null) }
     var removeNotes by remember(savedSettings.profile) { mutableStateOf<List<String>>(emptyList()) }
-    var pendingReplace by remember(savedSettings.profile) { mutableStateOf<PlanAction?>(null) }
+    var pendingReplace by checkState.replacement
     var pendingRemove by remember(savedSettings.profile) { mutableStateOf<FoundServer?>(null) }
+    var showRemovalRequest by remember(savedSettings.profile) { mutableStateOf(false) }
+    var showRemovalProgress by remember(savedSettings.profile) { mutableStateOf(false) }
+    var removalError by remember(savedSettings.profile) { mutableStateOf<String?>(null) }
+    var removalJob by remember(savedSettings.profile) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     // the server presented another SSH key than the remembered one: the change and the check to run again if trusted
     var keyChange by remember(savedSettings.profile) {
         mutableStateOf<Pair<SshHostKeyStore.KeyChange, (ServerInventory) -> Unit>?>(null)
@@ -342,21 +346,25 @@ internal fun DeployTab(
     val sshKeyArgs = Pair(if (savedSshKeysMode) savedSshPrivateKey else "", if (savedSshKeysMode) savedSshKeyPassphrase else "")
 
     // The read-only server check (deploy.sh inventory) every install and removal starts with: it decides what is offered.
-    fun runServerCheck(onChecked: (ServerInventory) -> Unit) {
-        if (DeployManager.isDeploying.value) return
+    fun runServerCheck(onChecked: (ServerInventory) -> Unit): kotlinx.coroutines.Job? {
+        if (DeployManager.isDeploying.value) return null
         val ssh = resolveServerPorts(savedManualPorts, sshPort, peerPort, webPort).ssh
+        val target = host
+        val user = sshLogin
+        val pass = if (savedSshKeysMode) "" else sshPassword
+        val keys = sshKeyArgs
         DeployManager.startDeploy()
         DeployManager.updateProgress(0.1f, "Проверка сервера…")
-        DeployManager.scope.launch {
+        return DeployManager.scope.launch {
             try {
                 val inventory = performServerCheck(
                     context = context,
-                    host = host,
-                    user = sshLogin,
-                    pass = if (savedSshKeysMode) "" else sshPassword,
+                    host = target,
+                    user = user,
+                    pass = pass,
                     port = ssh,
-                    privateKey = sshKeyArgs.first,
-                    keyPassphrase = sshKeyArgs.second,
+                    privateKey = keys.first,
+                    keyPassphrase = keys.second,
                 )
                 DeployManager.stopDeploy()
                 withContext(Dispatchers.Main) { onChecked(inventory) }
@@ -368,10 +376,11 @@ internal fun DeployTab(
                 DeployManager.writeError("Server check error (${e.javaClass.simpleName}): ${e.message}")
                 TunnelManager.addDeployErrorLog(message)
                 DeployManager.stopDeploy(message)
-                val change = SshHostKeyStore.takeKeyChange(host, ssh)
+                val change = SshHostKeyStore.takeKeyChange(target, ssh)
                 if (change != null) {
                     withContext(Dispatchers.Main) { keyChange = change to onChecked }
                 } else {
+                    withContext(Dispatchers.Main) { if (showRemovalProgress) removalError = message }
                     scope.launch { snackbarHostState.showSnackbar(message) }
                 }
             }
@@ -573,13 +582,20 @@ internal fun DeployTab(
                     showValidation = true
                     if (state.canInstall) {
                         runServerCheck { inventory ->
-                            checkPlan = planDeploy(
+                            val plan = planDeploy(
                                 inventory = inventory,
                                 manualPorts = if (savedManualPorts) resolveServerPorts(true, sshPort, peerPort, webPort) else null,
                                 profilePeerPort = resolveServerPorts(savedManualPorts, sshPort, peerPort, webPort).peer,
                                 dockerInstall = dockerInstall,
                                 appVersion = BuildConfig.VERSION_NAME.removePrefix("v"),
                             )
+                            val automaticAction = plan.actions.singleOrNull()?.takeUnless { it.destructive }
+                            if (automaticAction != null) {
+                                startDeploy(automaticAction)
+                            } else {
+                                checkPlan = plan
+                                TunnelManager.addDeployInfoLog("Для продолжения откройте «Деплой» и выберите действие в результате проверки")
+                            }
                         }
                     } else {
                         if (!state.mainPasswordConfigured) {
@@ -597,7 +613,7 @@ internal fun DeployTab(
                         }
                     }
                 }
-                DeployAction.Uninstall -> if (state.canUninstall) runServerCheck { removable = removableServers(it); removeNotes = removalNotes(it) }
+                DeployAction.Uninstall -> if (state.canUninstall) showRemovalRequest = true
                 DeployAction.PanelInfo -> showPanelInfoDialog = true
                 DeployAction.OpenControlPanel -> {
                     if (host.isBlank()) {
@@ -640,6 +656,32 @@ internal fun DeployTab(
         )
     }
 
+    if (showRemovalRequest) ServerRemovalRequestDialog(
+        name = savedSettings.serverName.ifBlank { "Сервер CSQTT" }, host = host, sshPort = sshPort, sshReady = state.canUninstall,
+        onDismiss = { showRemovalRequest = false },
+        onConfigure = { showRemovalRequest = false; showSecretsDialog = true },
+        onContinue = {
+            showRemovalRequest = false
+            showRemovalProgress = true
+            removalError = null
+            removalJob = runServerCheck {
+                if (showRemovalProgress) {
+                    showRemovalProgress = false
+                    removable = removableServers(it)
+                    removeNotes = removalNotes(it)
+                }
+            }
+        },
+    )
+    if (showRemovalProgress) ServerRemovalProgressDialog(
+        name = savedSettings.serverName.ifBlank { "Сервер CSQTT" }, host = host, sshPort = sshPort,
+        busy = removalError == null && (isDeploying || removalJob?.isActive == true), error = removalError,
+        onDismiss = {
+            removalJob?.cancel()
+            if (isDeploying) runCatching { DeployManager.activeSession?.close() }
+            showRemovalProgress = false
+        },
+    )
     val profilePeer = resolveServerPorts(savedManualPorts, sshPort, peerPort, webPort).peer
     checkPlan?.let { plan ->
         ServerCheckDialog(

@@ -1,5 +1,6 @@
 package com.csqtt.client.ui.v2.screens.logs
 
+import com.csqtt.client.ui.v2.design.V2TextSizes
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -39,6 +40,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
@@ -52,9 +54,12 @@ import com.csqtt.client.DeployManager
 import com.csqtt.client.LogEntry
 import com.csqtt.client.LogLevel
 import com.csqtt.client.TunnelManager
+import com.csqtt.client.SettingsStore
 import com.csqtt.client.showRaisedToast
 import com.csqtt.client.ui.v2.components.V2Card
 import com.csqtt.client.ui.v2.components.V2TopBar
+import com.csqtt.client.ui.v2.components.V2AdaptiveScreen
+import com.csqtt.client.ui.v2.components.LocalV2AdaptiveMetrics
 import com.csqtt.client.ui.v2.components.V2TransparentIconButton
 import com.csqtt.client.ui.v2.design.V2MonoFamily
 import com.csqtt.client.ui.v2.design.V2Palette
@@ -72,10 +77,11 @@ fun V2LogsScreen(
     onVersionClick: (() -> Unit)? = null,
 ) {
     val colors = V2Theme.colors
-    var level by rememberSaveable { mutableStateOf("Все уровни") }
+    var level by rememberSaveable { mutableStateOf("Обычные") }
     var source by rememberSaveable { mutableStateOf("Все события") }
+    val context = LocalContext.current
 
-    Column(
+    V2AdaptiveScreen(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = V2Sizes.ScreenPadding),
@@ -86,7 +92,7 @@ fun V2LogsScreen(
             onSettings = onSettings,
             onVersionClick = onVersionClick,
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(vertical = LocalV2AdaptiveMetrics.current.gap / 2), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             LogFilterMenu(level, logLevels, { level = it }, Modifier.weight(1f))
             LogFilterMenu(source, logSources, { source = it }, Modifier.weight(1f))
         }
@@ -94,8 +100,8 @@ fun V2LogsScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(bottom = 10.dp),
-            color = colors.bottomSurface,
+                .padding(bottom = 10.dp).testTag("logs-card"),
+            color = colors.surface,
             contentColor = colors.textPrimary,
             shape = RoundedCornerShape(26.dp),
             borderColor = null,
@@ -111,7 +117,7 @@ fun V2LogsScreen(
 private fun LogFilterMenu(selected: String, options: List<String>, onSelect: (String) -> Unit, modifier: Modifier) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier) {
-        TextButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text("$selected ▾", fontSize = 13.sp) }
+        TextButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text("$selected ▾", fontSize = V2TextSizes.Action) }
         DropdownMenu(expanded, { expanded = false }) {
             options.forEach { item -> DropdownMenuItem(text = { Text(item) }, onClick = { onSelect(item); expanded = false }) }
         }
@@ -135,7 +141,7 @@ private fun V2LogsTerminal(levelFilter: String, sourceFilter: String) {
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (currentLogs.isEmpty()) Text("Событий пока нет", color = V2Theme.colors.textSecondary, modifier = Modifier.align(Alignment.Center), fontSize = 13.sp)
+        if (currentLogs.isEmpty()) Text("Событий пока нет", color = V2Theme.colors.textSecondary, modifier = Modifier.align(Alignment.Center), fontSize = V2TextSizes.Secondary)
         if (currentLogs.isNotEmpty()) {
             LazyColumn(
                 state = listState,
@@ -345,7 +351,7 @@ private fun V2LogLine(
                     text = rawTag.uppercase(),
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.Normal,
                         letterSpacing = 0.5.sp,
                     ),
                     fontFamily = V2MonoFamily,
@@ -362,14 +368,14 @@ private fun V2LogLine(
                 lineHeight = 17.sp,
             ),
             fontFamily = V2MonoFamily,
-            fontWeight = if (isError) FontWeight.Medium else FontWeight.Normal,
+            fontWeight = FontWeight.Normal,
             modifier = Modifier.weight(1f),
         )
 
         if (entry.count > 1) {
             Surface(
                 shape = V2Shapes.Pill,
-                color = colors.surfaceElevated,
+                color = colors.surface,
                 contentColor = colors.textSecondary,
                 border = null,
                 modifier = Modifier.defaultMinSize(minHeight = 18.dp),
@@ -382,7 +388,7 @@ private fun V2LogLine(
                         text = "x${entry.count}",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium,
+                            fontWeight = FontWeight.Normal,
                         ),
                         fontFamily = V2MonoFamily,
                         maxLines = 1,

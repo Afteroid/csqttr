@@ -90,7 +90,7 @@ fun V2VersionBadge(
             text = version,
             style = MaterialTheme.typography.labelMedium.copy(
                 fontFamily = V2VersionFamily,
-                fontWeight = FontWeight.ExtraBold,
+                fontWeight = FontWeight.Normal,
                 fontSize = 13.sp,
                 letterSpacing = 0.5.sp,
             ),
@@ -119,7 +119,7 @@ fun V2Avatar(
         Text(
             text = initials,
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.ExtraBold,
+            fontWeight = FontWeight.Normal,
             color = initialsColor,
         )
     }
