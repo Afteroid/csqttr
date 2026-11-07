@@ -80,7 +80,7 @@ private val teamMembers = listOf(
     ),
     V2TeamMember(
         name = "Fikisq",
-        description = "Участник сообщества и один из разработчиков csqttr.",
+        description = "Участник сообщества. Рисовал дизайн для этого приложения (csqttr).",
         githubUrl = "https://github.com/Fikisq",
         username = "Fikisq",
     ),
@@ -89,6 +89,30 @@ private val teamMembers = listOf(
         description = "Участник сообщества. Рисовал дизайн для этого приложения (csqttr).",
         githubUrl = "https://github.com/luminescq",
         username = "luminescq",
+    ),
+    V2TeamMember(
+        name = "Влад Гроза",
+        description = "Участник сообщества и один из разработчиков csqttr.",
+        githubUrl = "https://github.com/Endlad2",
+        username = "Endlad2",
+    ),
+    V2TeamMember(
+        name = "w3struk",
+        description = "Участник сообщества и один из разработчиков csqttr.",
+        githubUrl = "https://github.com/w3struk",
+        username = "w3struk",
+    ),
+    V2TeamMember(
+        name = "Afteroid (S)",
+        description = "Участник сообщества. Создатель команды csqttr.",
+        githubUrl = "https://github.com/Afteroid",
+        username = "Afteroid",
+    ),
+    V2TeamMember(
+        name = "ttrroyy",
+        description = "Участник сообщества и один из разработчиков csqttr.",
+        githubUrl = "https://github.com/ttrroyy",
+        username = "ttrroyy",
     ),
 )
 
