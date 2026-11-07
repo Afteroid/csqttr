@@ -69,7 +69,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "csqtt.quic.amurcanov"
+        applicationId = "csqttr.quic.amurcanov"
         minSdk = 26
         targetSdk = 37
         versionCode = 250

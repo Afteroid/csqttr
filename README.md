@@ -53,7 +53,7 @@ SSH-порт расположен рядом с IP сервера. При вкл
 
 Для отдельной тестовой установки, сохраняющей установленную debug-версию,
 соберите `assembleDebug -Pcsqtt.abis=arm64-v8a -Pcsqtt.debugApplicationIdSuffix=.sshfix -Pcsqtt.debugAppLabel="CSQTTR SSH Fix"`.
-Пакет будет называться `csqtt.quic.amurcanov.sshfix`; без этого параметра
+Пакет будет называться `csqttr.quic.amurcanov.sshfix`; без этого параметра
 debug-сборка сохраняет прежний суффикс `.forktest`.
 
 ## Новый интерфейс и сборка для ревью
@@ -91,7 +91,7 @@ PEER-порт, пароль, хеши либо VK-токен. Настройки
 gradlew.bat :app:assembleDebug -Pcsqtt.abis=arm64-v8a -Pcsqtt.debugApplicationIdSuffix=.happdebug -Pcsqtt.debugAppLabel=csqtt_debug -Pcsqtt.debugVersionNameSuffix=-debug.5
 ```
 
-Имя под иконкой — `csqtt_debug`, пакет — `csqtt.quic.amurcanov.happdebug`.
+Имя под иконкой — `csqtt_debug`, пакет — `csqttr.quic.amurcanov.happdebug`.
 Это стандартная подпись Android debug, не ключ автора исходного APK.
 Интерфейс показывает только основную версию, без служебного суффикса сборки.
 Подсказки режимов разбиты на разделы, пустые поля показывают формат ввода.
