@@ -1,0 +1,142 @@
+name: Build Linux server cores
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "GitHub release tag to publish binaries to (empty = artifact only)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: server-cores-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.17.0"
+
+      - name: Install Rust 1.97.1
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add --toolchain 1.97.1 \
+            x86_64-unknown-linux-musl \
+            aarch64-unknown-linux-musl \
+            armv7-unknown-linux-musleabihf
+          rustc +1.97.1 --version
+
+      - name: Install cargo-zigbuild
+        run: |
+          cargo install cargo-zigbuild --version 0.24.1 --locked
+          cargo zigbuild --version
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build perl nasm pkg-config
+
+      - name: Check PowerShell
+        run: pwsh --version
+
+      - name: Build server cores
+        run: bash rust-server/build_linux.sh --no-tests
+
+      - name: Show artifacts
+        run: |
+          file rust-server/dist/csqtt-linux-*
+          sha256sum rust-server/dist/csqtt-linux-*
+          ls -lh rust-server/dist/csqtt-linux-*
+
+      - name: Prepare release manifest
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          cp app/src/main/assets/csqtt.server-provenance.json rust-server/dist/csqtt.server-provenance.json
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          tag = os.environ.get("RELEASE_TAG", "").strip()
+          if not tag:
+              print("No release tag provided: server-downloads.json is not generated")
+              raise SystemExit(0)
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          dist = Path("rust-server/dist")
+          assets = ["csqtt-linux-amd64", "csqtt-linux-arm64", "csqtt-linux-armv7"]
+          manifest = {}
+          for name in assets:
+              data = (dist / name).read_bytes()
+              manifest[name] = {
+                  "url": f"https://github.com/{repo}/releases/download/{tag}/{name}",
+                  "size": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              }
+          output = dist / "server-downloads.json"
+          output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          print(output.read_text())
+          PY
+
+      - name: Publish GitHub release
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" rust-server/dist/csqtt-linux-* --clobber
+          else
+            gh release create "$RELEASE_TAG" rust-server/dist/csqtt-linux-* \
+              --title "$RELEASE_TAG" \
+              --notes "CSQTT Linux server cores built from ${GITHUB_SHA}."
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: csqtt-server-${{ github.run_number }}
+          path: |
+            rust-server/dist/csqtt-linux-amd64
+            rust-server/dist/csqtt-linux-arm64
+            rust-server/dist/csqtt-linux-armv7
+            rust-server/dist/csqtt.server-provenance.json
+            rust-server/dist/server-downloads.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Write summary
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          {
+            echo "### CSQTT Linux server cores"
+            echo ""
+            echo "| Asset | Size | SHA-256 |"
+            echo "|---|---|---|"
+            for f in rust-server/dist/csqtt-linux-*; do
+              echo "| $(basename "$f") | $(stat -c%s "$f") | $(sha256sum "$f" | cut -d' ' -f1) |"
+            done
+            echo ""
+            if [ -n "$RELEASE_TAG" ]; then
+              echo "Published to GitHub release: \`$RELEASE_TAG\`"
+              echo ""
+              echo "Next: commit \`app/src/main/assets/csqtt.server-provenance.json\` and"
+              echo "replace \`app/src/main/assets/server-downloads.json\` with the generated file,"
+              echo "then rebuild the APK."
+            else
+              echo "No release tag provided. Download the artifact and publish the binaries manually."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

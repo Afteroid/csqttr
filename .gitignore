@@ -19,3 +19,4 @@ rust-server/target/
 scratch/
 assets-files/
 docs/
+rust-server/dist/
