@@ -41,7 +41,7 @@ jobs:
       - name: Install cargo-zigbuild
         run: |
           cargo install cargo-zigbuild --version 0.24.1 --locked
-          cargo zigbuild --version
+          cargo zigbuild --help >/dev/null
 
       - name: Install native build dependencies
         run: |
